@@ -3,21 +3,6 @@ const DashboardRenderer = (() => {
   const _charts = {};
   let _slicerSearchQueries = {};
 
-  // Màu thống nhất cho tất cả chart card (nhẹ, tươi sáng)
-  const _CARD_THEME = { h: '#0284C7', b: '#BAE6FD', bg: '#F0F9FF' };
-
-  // Bảng màu dùng chung cho slicer card + chart card
-  const _PALETTE = [
-    { h: '#2563EB', b: '#3B82F6', bg: '#EFF6FF', accent: 'accent-blue-600' },
-    { h: '#059669', b: '#10B981', bg: '#ECFDF5', accent: 'accent-emerald-600' },
-    { h: '#D97706', b: '#F59E0B', bg: '#FFFBEB', accent: 'accent-amber-600' },
-    { h: '#7C3AED', b: '#8B5CF6', bg: '#F5F3FF', accent: 'accent-violet-600' },
-    { h: '#E11D48', b: '#F43F5E', bg: '#FFF1F2', accent: 'accent-rose-600' },
-    { h: '#0891B2', b: '#06B6D4', bg: '#ECFEFF', accent: 'accent-cyan-600' },
-    { h: '#DB2777', b: '#EC4899', bg: '#FDF2F8', accent: 'accent-pink-600' },
-    { h: '#65A30D', b: '#84CC16', bg: '#F7FEE7', accent: 'accent-lime-600' },
-  ];
-
   function setData(data) { _data = data; }
 
   function _canvasId(name) {
@@ -40,14 +25,6 @@ const DashboardRenderer = (() => {
       try { _charts[k].destroy(); } catch (_) {}
       delete _charts[k];
     });
-  }
-
-  function _applyTopN(data, topN) {
-    if (!topN || topN <= 0) return data;
-    return {
-      labels: data.labels.slice(0, topN),
-      datasets: data.datasets.map(ds => ({ ...ds, data: ds.data.slice(0, topN) })),
-    };
   }
 
   // ── Slicer Panel ──────────────────────────────────────────────────────────
@@ -76,8 +53,7 @@ const DashboardRenderer = (() => {
           Chưa có slicer nào.<br>Nhấn <strong class="text-gray-500">+ Thêm</strong> để tạo.
         </p>`;
     } else {
-      listEl.innerHTML = slicers.map((s, idx) => {
-        const p = _PALETTE[idx % _PALETTE.length];
+      listEl.innerHTML = slicers.map(s => {
         const fieldDef = APP_CONFIG.fieldDefinitions.find(f => f.key === s.field);
         const label = fieldDef ? fieldDef.label : s.field;
         const uniqueVals = SlicerService.getUniqueValues(_data, s.field);
@@ -85,17 +61,14 @@ const DashboardRenderer = (() => {
         const linked = Array.isArray(s.linkedCharts) ? s.linkedCharts : [];
 
         return `
-          <div class="slicer-card rounded-xl mb-3 overflow-hidden text-xs shadow-sm"
-               style="border: 2px solid ${p.b}; background: ${p.bg}"
-               data-slicer-id="${s.id}">
-            <div class="flex items-center justify-between px-3 py-2" style="background: ${p.h}">
-              <span class="font-bold text-white text-sm tracking-wide truncate" title="${label}">${label}</span>
-              ${AuthService.isEditor() ? `<button class="slicer-del text-white/60 hover:text-white ml-2 flex-shrink-0 transition-colors leading-none text-base font-bold"
+          <div class="slicer-card border border-gray-200 rounded-lg mb-2 overflow-hidden text-xs" data-slicer-id="${s.id}">
+            <div class="flex items-center justify-between px-2.5 py-1.5 bg-gray-50 border-b border-gray-100">
+              <span class="font-semibold text-gray-700 truncate" title="${label}">${label}</span>
+              ${AuthService.isEditor() ? `<button class="slicer-del text-gray-300 hover:text-red-500 ml-1 flex-shrink-0 transition-colors leading-none"
                       data-id="${s.id}" title="Xóa slicer">✕</button>` : ''}
             </div>
-            <div class="px-2 pt-2">
-              <input type="text" class="slicer-search w-full text-xs rounded px-2 py-1 outline-none bg-white placeholder-gray-300"
-                     style="border: 1.5px solid ${p.b}80"
+            <div class="px-2 pt-1.5">
+              <input type="text" class="slicer-search w-full text-xs border border-gray-200 rounded px-2 py-1 outline-none focus:border-blue-400 bg-white placeholder-gray-300"
                      data-id="${s.id}" placeholder="🔍 Tìm..."
                      value="${(_slicerSearchQueries[s.id] || '').replace(/"/g,'&quot;')}">
             </div>
@@ -106,36 +79,34 @@ const DashboardRenderer = (() => {
                   : uniqueVals.map(v => {
                       const isActive = s.selectedValues.length === 0 || s.selectedValues.includes(v);
                       const escaped = v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-                      const activeStyle = `background:${p.h};color:white;border-color:${p.h}`;
-                      const inactiveStyle = 'background:white;color:#6B7280;border-color:#E5E7EB';
-                      return `<button class="slicer-val px-1.5 py-0.5 rounded border transition-colors"
-                                style="${isActive ? activeStyle : inactiveStyle}"
-                                data-id="${s.id}" data-val="${escaped}"
-                                data-active-style="${activeStyle}">${v || '(trống)'}</button>`;
+                      return `<button class="slicer-val px-1.5 py-0.5 rounded border transition-colors
+                                ${isActive
+                                  ? 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
+                                  : 'bg-white text-gray-500 border-gray-200 hover:border-blue-400 hover:text-blue-600'}"
+                                data-id="${s.id}" data-val="${escaped}">${v || '(trống)'}</button>`;
                     }).join('')
                 }
               </div>
               ${s.selectedValues.length
-                ? `<button class="slicer-clear font-semibold self-start transition-colors" style="color:${p.h}" data-id="${s.id}">✕ Bỏ lọc</button>`
+                ? `<button class="slicer-clear text-blue-500 hover:text-blue-700 self-start transition-colors" data-id="${s.id}">✕ Bỏ lọc</button>`
                 : ''
               }
               ${viewNames.length > 0 && AuthService.isEditor() ? `
-              <div class="border-t pt-1.5" style="border-color:${p.b}40">
-                <p class="mb-1.5 font-semibold" style="color:${p.h}">Áp dụng cho:</p>
+              <div class="border-t border-gray-100 pt-1.5">
+                <p class="text-gray-400 mb-1.5 font-medium">Áp dụng cho:</p>
                 <div class="flex flex-col gap-0.5">
-                  <label class="flex items-center gap-1.5 cursor-pointer px-1 py-0.5 rounded transition-colors hover:bg-white/60">
-                    <input type="checkbox" class="slicer-link-all ${p.accent}" data-id="${s.id}" ${isAll ? 'checked' : ''}>
-                    <span class="${isAll ? 'font-bold' : 'text-gray-500'}" ${isAll ? `style="color:${p.h}"` : ''}>Tất cả biểu đồ</span>
+                  <label class="flex items-center gap-1.5 cursor-pointer hover:bg-blue-50 px-1 py-0.5 rounded transition-colors">
+                    <input type="checkbox" class="slicer-link-all accent-blue-600" data-id="${s.id}" ${isAll ? 'checked' : ''}>
+                    <span class="${isAll ? 'font-semibold text-blue-700' : 'text-gray-500'}">Tất cả biểu đồ</span>
                   </label>
                   ${viewNames.map(n => {
                     const isLinked = !isAll && linked.includes(n);
                     const esc = n.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-                    return `<label class="flex items-center gap-1.5 cursor-pointer px-1 py-0.5 rounded ml-2 transition-colors hover:bg-white/60">
-                      <input type="checkbox" class="slicer-link-chart ${p.accent}"
+                    return `<label class="flex items-center gap-1.5 cursor-pointer hover:bg-blue-50 px-1 py-0.5 rounded ml-2 transition-colors">
+                      <input type="checkbox" class="slicer-link-chart accent-blue-600"
                              data-id="${s.id}" data-chart="${esc}"
                              ${isLinked ? 'checked' : ''} ${isAll ? 'disabled' : ''}>
-                      <span class="truncate ${isAll ? 'text-gray-300' : ''}"
-                            ${isLinked ? `style="color:${p.h};font-weight:600"` : ''}
+                      <span class="truncate ${isLinked ? 'text-blue-600 font-medium' : isAll ? 'text-gray-300' : 'text-gray-500'}"
                             title="${esc}">${n}</span>
                     </label>`;
                   }).join('')}
@@ -293,61 +264,46 @@ const DashboardRenderer = (() => {
       return;
     }
 
-    container.innerHTML = order.map((name, idx) => {
-      const p        = _CARD_THEME;
-      const config   = views[name] || {};
-      const chartType = config.chartType  || 'bar';
+    container.innerHTML = order.map(name => {
+      const config = views[name] || {};
+      const chartType = config.chartType || 'bar';
       const sortType  = config.chartSort  || 'none';
-      const topN      = config.chartTopN  || 0;
       const cid = _canvasId(name);
       const hasFilter = SlicerService.getAll().some(s =>
         s.selectedValues.length && (s.linkedCharts === 'all' || (Array.isArray(s.linkedCharts) && s.linkedCharts.includes(name)))
       );
       return `
-        <div class="dashboard-card rounded-xl shadow-sm overflow-hidden flex flex-col"
-             style="border: 2px solid ${p.b}"
+        <div class="dashboard-card bg-white rounded-xl border-2 ${hasFilter ? 'border-blue-200' : 'border-gray-100'} shadow-sm p-4 flex flex-col gap-2"
              draggable="true" data-name="${name}">
-          <!-- Header: tiêu đề màu nền -->
-          <div class="flex items-center gap-2 px-3 py-2.5" style="background:${p.h}">
-            <span class="cursor-grab text-white/50 hover:text-white/90 select-none text-xl leading-none flex-shrink-0"
-                  title="Kéo để sắp xếp thứ tự">⠿</span>
-            <h3 class="font-bold text-white text-sm tracking-wide truncate flex-1 min-w-0" title="${name}">${name}</h3>
-            ${hasFilter ? `<span class="flex-shrink-0 text-yellow-300 text-xs font-bold">⚡ Lọc</span>` : ''}
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="cursor-grab text-gray-300 hover:text-blue-400 select-none text-xl leading-none"
+                    title="Kéo để sắp xếp thứ tự">⠿</span>
+              <h3 class="font-semibold text-gray-700 text-sm truncate" title="${name}">${name}</h3>
+              ${hasFilter ? `<span class="flex-shrink-0 text-xs text-blue-500 font-medium">⚡ Lọc</span>` : ''}
+            </div>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+              <select class="dash-sort-sel text-xs border border-gray-200 rounded px-1.5 py-0.5
+                             text-gray-600 focus:outline-none focus:border-blue-400 bg-white"
+                      data-name="${name}" title="Sắp xếp">
+                <option value="none"        ${sortType === 'none'        ? 'selected' : ''}>↕ Sắp xếp</option>
+                <option value="value-desc"  ${sortType === 'value-desc'  ? 'selected' : ''}>↓ Giá trị</option>
+                <option value="value-asc"   ${sortType === 'value-asc'   ? 'selected' : ''}>↑ Giá trị</option>
+                <option value="label-asc"   ${sortType === 'label-asc'   ? 'selected' : ''}>A → Z</option>
+                <option value="label-desc"  ${sortType === 'label-desc'  ? 'selected' : ''}>Z → A</option>
+              </select>
+              <select class="dash-type-sel text-xs border border-gray-200 rounded px-1.5 py-0.5
+                             text-gray-600 focus:outline-none focus:border-blue-400 bg-white"
+                      data-name="${name}">
+                <option value="bar"      ${chartType === 'bar'      ? 'selected' : ''}>Bar</option>
+                <option value="line"     ${chartType === 'line'     ? 'selected' : ''}>Line</option>
+                <option value="area"     ${chartType === 'area'     ? 'selected' : ''}>Area</option>
+                <option value="pie"      ${chartType === 'pie'      ? 'selected' : ''}>Pie</option>
+                <option value="doughnut" ${chartType === 'doughnut' ? 'selected' : ''}>Donut</option>
+              </select>
+            </div>
           </div>
-          <!-- Controls row -->
-          <div class="flex items-center justify-end gap-1.5 px-3 py-1.5 border-b" style="background:${p.bg};border-color:${p.b}40">
-            <select class="dash-sort-sel text-xs border border-gray-200 rounded px-1.5 py-0.5
-                           text-gray-600 focus:outline-none bg-white"
-                    data-name="${name}" title="Sắp xếp">
-              <option value="none"        ${sortType === 'none'        ? 'selected' : ''}>↕ Sắp xếp</option>
-              <option value="value-desc"  ${sortType === 'value-desc'  ? 'selected' : ''}>↓ Cao nhất</option>
-              <option value="value-asc"   ${sortType === 'value-asc'   ? 'selected' : ''}>↑ Thấp nhất</option>
-              <option value="label-asc"   ${sortType === 'label-asc'   ? 'selected' : ''}>A → Z</option>
-              <option value="label-desc"  ${sortType === 'label-desc'  ? 'selected' : ''}>Z → A</option>
-            </select>
-            <select class="dash-topn-sel text-xs border border-gray-200 rounded px-1.5 py-0.5
-                           text-gray-600 focus:outline-none bg-white"
-                    data-name="${name}" title="Hiển thị Top">
-              <option value="0"  ${topN === 0  ? 'selected' : ''}>Tất cả</option>
-              <option value="5"  ${topN === 5  ? 'selected' : ''}>Top 5</option>
-              <option value="10" ${topN === 10 ? 'selected' : ''}>Top 10</option>
-              <option value="20" ${topN === 20 ? 'selected' : ''}>Top 20</option>
-              <option value="50" ${topN === 50 ? 'selected' : ''}>Top 50</option>
-            </select>
-            <select class="dash-type-sel text-xs border border-gray-200 rounded px-1.5 py-0.5
-                           text-gray-600 focus:outline-none bg-white"
-                    data-name="${name}">
-              <option value="bar"      ${chartType === 'bar'      ? 'selected' : ''}>Bar</option>
-              <option value="line"     ${chartType === 'line'     ? 'selected' : ''}>Line</option>
-              <option value="area"     ${chartType === 'area'     ? 'selected' : ''}>Area</option>
-              <option value="pie"      ${chartType === 'pie'      ? 'selected' : ''}>Pie</option>
-              <option value="doughnut" ${chartType === 'doughnut' ? 'selected' : ''}>Donut</option>
-            </select>
-            <button class="dash-dl-btn text-xs px-2 py-1 border border-gray-200 rounded hover:bg-gray-100 text-gray-600 transition-colors"
-                    data-name="${name}" title="Tải biểu đồ dạng ảnh">⬇</button>
-          </div>
-          <!-- Canvas -->
-          <div class="relative flex-1 bg-white p-2" style="min-height:220px">
+          <div class="relative flex-1" style="min-height:220px">
             <canvas id="${cid}"></canvas>
           </div>
         </div>`;
@@ -357,7 +313,7 @@ const DashboardRenderer = (() => {
       const config = views[name] || {};
       const filteredData = SlicerService.getFilteredData(_data, name);
       const result = PivotEngine.compute(filteredData, config);
-      _renderOne(_canvasId(name), result, config.chartType || 'bar', config.chartSort || 'value-desc', config.chartTopN || 0, cardIndex, filteredData, config);
+      _renderOne(_canvasId(name), result, config.chartType || 'bar', config.chartSort || 'none', cardIndex, filteredData, config);
     });
 
     container.querySelectorAll('.dash-sort-sel').forEach(sel => {
@@ -367,22 +323,9 @@ const DashboardRenderer = (() => {
         const vs = DataService.loadPivotViews();
         if (!vs[name]) return;
         vs[name].chartSort = sel.value;
-        DataService.savePivotView(name, vs[name]);
+        localStorage.setItem('crm_pivot_views', JSON.stringify(vs));
         const filteredData = SlicerService.getFilteredData(_data, name);
-        _renderOne(_canvasId(name), PivotEngine.compute(filteredData, vs[name]), vs[name].chartType || 'bar', sel.value, vs[name].chartTopN || 0, cardIndex, filteredData, vs[name]);
-      });
-    });
-
-    container.querySelectorAll('.dash-topn-sel').forEach(sel => {
-      sel.addEventListener('change', () => {
-        const name = sel.dataset.name;
-        const cardIndex = order.indexOf(name);
-        const vs = DataService.loadPivotViews();
-        if (!vs[name]) return;
-        vs[name].chartTopN = parseInt(sel.value, 10) || 0;
-        DataService.savePivotView(name, vs[name]);
-        const filteredData = SlicerService.getFilteredData(_data, name);
-        _renderOne(_canvasId(name), PivotEngine.compute(filteredData, vs[name]), vs[name].chartType || 'bar', vs[name].chartSort || 'none', vs[name].chartTopN || 0, cardIndex, filteredData, vs[name]);
+        _renderOne(_canvasId(name), PivotEngine.compute(filteredData, vs[name]), vs[name].chartType || 'bar', sel.value, cardIndex, filteredData, vs[name]);
       });
     });
 
@@ -393,53 +336,9 @@ const DashboardRenderer = (() => {
         const vs = DataService.loadPivotViews();
         if (!vs[name]) return;
         vs[name].chartType = sel.value;
-        DataService.savePivotView(name, vs[name]);
+        localStorage.setItem('crm_pivot_views', JSON.stringify(vs));
         const filteredData = SlicerService.getFilteredData(_data, name);
-        _renderOne(_canvasId(name), PivotEngine.compute(filteredData, vs[name]), sel.value, vs[name].chartSort || 'none', vs[name].chartTopN || 0, cardIndex, filteredData, vs[name]);
-      });
-    });
-
-    const _SORT_LABELS = { 'none': '', 'value-desc': '↓ Cao nhất', 'value-asc': '↑ Thấp nhất', 'label-asc': 'A → Z', 'label-desc': 'Z → A' };
-    const _TYPE_LABELS = { 'bar': 'Bar', 'line': 'Line', 'area': 'Area', 'pie': 'Pie', 'doughnut': 'Donut' };
-    container.querySelectorAll('.dash-dl-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const name  = btn.dataset.name;
-        const chart = _charts[_canvasId(name)];
-        if (!chart) return;
-
-        const card   = btn.closest('.dashboard-card');
-        const sortV  = card?.querySelector('.dash-sort-sel')?.value || 'none';
-        const topnV  = card?.querySelector('.dash-topn-sel')?.value  || '0';
-        const typeV  = card?.querySelector('.dash-type-sel')?.value  || 'bar';
-        const parts  = [
-          _SORT_LABELS[sortV],
-          topnV > 0 ? `Top ${topnV}` : 'Tất cả',
-          _TYPE_LABELS[typeV] || typeV,
-        ].filter(Boolean);
-        const subtitle = parts.join('  |  ');
-
-        const src = chart.canvas;
-        const headerH = 56;
-        const tmp = document.createElement('canvas');
-        tmp.width  = src.width;
-        tmp.height = src.height + headerH;
-        const ctx2 = tmp.getContext('2d');
-        ctx2.fillStyle = '#ffffff';
-        ctx2.fillRect(0, 0, tmp.width, tmp.height);
-        ctx2.fillStyle = '#1e3a5f';
-        ctx2.fillRect(0, 0, tmp.width, headerH);
-        ctx2.fillStyle = '#ffffff';
-        ctx2.font = 'bold 14px Arial, sans-serif';
-        ctx2.textBaseline = 'middle';
-        ctx2.fillText(name, 12, 18);
-        ctx2.fillStyle = '#93c5fd';
-        ctx2.font = '11px Arial, sans-serif';
-        ctx2.fillText(subtitle, 12, 40);
-        ctx2.drawImage(src, 0, headerH);
-        const link = document.createElement('a');
-        link.download = name + '.png';
-        link.href = tmp.toDataURL('image/png');
-        link.click();
+        _renderOne(_canvasId(name), PivotEngine.compute(filteredData, vs[name]), sel.value, vs[name].chartSort || 'none', cardIndex, filteredData, vs[name]);
       });
     });
 
@@ -481,14 +380,13 @@ const DashboardRenderer = (() => {
     return chartData;
   }
 
-  function _renderOne(canvasId, pivotResult, chartType, sortType, topN, cardIndex, drillRawData, drillConfig) {
+  function _renderOne(canvasId, pivotResult, chartType, sortType, cardIndex, drillRawData, drillConfig) {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
     if (_charts[canvasId]) { try { _charts[canvasId].destroy(); } catch (_) {} delete _charts[canvasId]; }
 
-    const sorted    = ChartRenderer.sortChartData(PivotEngine.toChartData(pivotResult, chartType), sortType || 'none');
-    const topped    = _applyTopN(sorted, topN || 0);
-    const chartData = _applyCardColors(topped, chartType, cardIndex);
+    const rawData = ChartRenderer.sortChartData(PivotEngine.toChartData(pivotResult, chartType), sortType || 'none');
+    const chartData = _applyCardColors(rawData, chartType, cardIndex);
 
     let noData = canvas.parentElement.querySelector('.dash-no-data');
     if (!chartData.labels.length) {

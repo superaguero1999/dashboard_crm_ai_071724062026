@@ -166,13 +166,6 @@ const ImportWizard = (() => {
 
     const progressBar  = document.getElementById('import-progress-bar');
     const progressText = document.getElementById('import-progress-text');
-    const dupSummary   = document.getElementById('import-duplicate-summary');
-    const dupCount     = document.getElementById('import-dup-count');
-    const dupList      = document.getElementById('import-dup-list');
-
-    // Reset duplicate summary
-    dupSummary.style.display = 'none';
-    dupList.innerHTML = '';
 
     progressText.textContent = 'Đang tải dữ liệu hiện tại...';
     progressBar.style.width = '5%';
@@ -183,25 +176,6 @@ const ImportWizard = (() => {
     const existingMap = {};
     for (const rec of existingRecords) {
       existingMap[ExcelService.buildRowKey(rec)] = rec;
-    }
-
-    // Phân loại: mới vs trùng
-    const newRows = [];
-    const dupRows = [];
-    for (const row of allRows) {
-      const key = ExcelService.buildRowKey(row);
-      if (existingMap[key]) dupRows.push(row);
-      else newRows.push(row);
-    }
-
-    // Hiển thị tóm tắt trùng lặp
-    if (dupRows.length > 0) {
-      const keyField = APP_CONFIG.rowKeyFields[0] || 'code';
-      dupCount.textContent = `⚠ ${dupRows.length} bản ghi trùng (sẽ được cập nhật):`;
-      dupList.innerHTML = dupRows
-        .map(r => `<span style="display:inline-block;background:#fef3c7;border:1px solid #f59e0b;border-radius:4px;padding:1px 6px;margin:2px;font-size:12px">${r[keyField] || '?'}</span>`)
-        .join('');
-      dupSummary.style.display = '';
     }
 
     // Merge: giữ nguyên trường không được map, overwrite trường được map
@@ -226,10 +200,7 @@ const ImportWizard = (() => {
     }
 
     progressBar.style.width = '100%';
-    const parts = [];
-    if (newRows.length > 0) parts.push(`Thêm mới: ${newRows.length}`);
-    if (dupRows.length > 0) parts.push(`Cập nhật: ${dupRows.length}`);
-    progressText.textContent = `Hoàn tất! ${parts.join(' · ')} bản ghi.`;
+    progressText.textContent = `Hoàn tất! Đã import ${toUpsert.length} records.`;
     document.getElementById('import-done-btn').style.display = '';
 
     if (_onImportDone) _onImportDone(toUpsert);

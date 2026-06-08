@@ -1,12 +1,9 @@
 const SlicerService = (() => {
-  let _lsKey = 'crm_slicers';
+  const LS_KEY = 'crm_slicers';
 
-  function setNamespace(ns) {
-    _lsKey = ns === 'spm2' ? 'crm2_slicers' : 'crm_slicers';
-  }
+  function _load() { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); }
 
-  function _load() { return JSON.parse(localStorage.getItem(_lsKey) || '[]'); }
-  function _save(list) { localStorage.setItem(_lsKey, JSON.stringify(list)); }
+  function _save(list) { localStorage.setItem(LS_KEY, JSON.stringify(list)); }
 
   function getAll() { return _load(); }
 
@@ -45,6 +42,7 @@ const SlicerService = (() => {
     _save(slicers);
   }
 
+  // Returns data filtered by slicers that are active and linked to chartName
   function getFilteredData(data, chartName) {
     const active = _load().filter(s => {
       if (!s.selectedValues.length) return false;
@@ -66,5 +64,5 @@ const SlicerService = (() => {
     return [...vals].sort((a, b) => a.localeCompare(b, 'vi'));
   }
 
-  return { setNamespace, getAll, add, remove, toggleValue, clearValues, setLinkedCharts, getFilteredData, getUniqueValues };
+  return { getAll, add, remove, toggleValue, clearValues, setLinkedCharts, getFilteredData, getUniqueValues };
 })();
