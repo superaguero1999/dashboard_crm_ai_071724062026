@@ -6,9 +6,19 @@ const APP_CONFIG = {
   nocodb: {
     baseUrl: 'https://iatzhxxuk.tino.page/nocodb',
     token: 'G3QREWJrrT_E7QHPfteLJlI90zab7mUW_jNMwZIu',
-    tableId: 'mg40qyo3y89upf7',          // bảng crm_data (dữ liệu lỗi)
-    configTableId: 'mgu91jvt242037c',   // bảng crm_config (lưu views/settings)
-    saleoutTableId: 'm2nki0bw89rgarw',                  // TODO: Điền Table ID bảng crm_saleout (dữ liệu sale out)
+    tableId: 'mg40qyo3y89upf7',          // bảng crm_data (dữ liệu lỗi - thiết kế mới)
+    configTableId: 'mgu91jvt242037c',    // bảng crm_config (lưu views/settings - thiết kế mới)
+    saleoutTableId: 'm2nki0bw89rgarw',   // bảng crm_saleout (sale out - thiết kế mới)
+  },
+
+  // ─── NocoDB — dataset 2: tất cả lỗi linh kiện ───────────────────────────
+  // TODO: Điền Table ID sau khi tạo bảng trên NocoDB
+  nocodb2: {
+    baseUrl: 'https://iatzhxxuk.tino.page/nocodb',
+    token: 'G3QREWJrrT_E7QHPfteLJlI90zab7mUW_jNMwZIu',
+    tableId: 'masi6jzm85yarvy',          // TODO: bảng crm2_data (danh sách lỗi - tất cả)
+    configTableId: 'mluc1hzp92zfp8m',    // TODO: bảng crm2_config (views/settings)
+    saleoutTableId: 'mnq65gc7frjz7tv',   // TODO: bảng crm2_saleout (sale out - tất cả)
   },
 
   // ─── Row key: tổ hợp fields dùng để identify 1 record (merge logic) ────

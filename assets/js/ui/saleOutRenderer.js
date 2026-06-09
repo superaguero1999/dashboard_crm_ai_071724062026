@@ -9,6 +9,7 @@ const SaleOutRenderer = (() => {
   let _chartMonth   = null;
   let _productTopN  = 20;
   let _productOrder = 'desc';
+  let _isLoading    = false;
 
   const COLORS = APP_CONFIG ? APP_CONFIG.chartColors : [
     '#3B82F6','#EF4444','#10B981','#F59E0B','#8B5CF6',
@@ -16,6 +17,39 @@ const SaleOutRenderer = (() => {
   ];
 
   function _el(id) { return document.getElementById(id); }
+
+  // ── Loading helpers ──────────────────────────────────────────────────────
+  function _spinnerHtml(size) {
+    const sz = size === 'sm' ? 'w-5 h-5' : 'w-8 h-8';
+    const py = size === 'sm' ? 'py-6'    : 'py-16';
+    return `<div class="flex flex-col items-center justify-center ${py} gap-2 text-gray-400">
+      <svg class="${sz} animate-spin text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 22 6.477 22 12h-4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+      </svg>
+      <p class="text-xs text-blue-400">Đang tải dữ liệu...</p>
+    </div>`;
+  }
+
+  function _showChartLoader(wrapId) {
+    const wrap = _el(wrapId);
+    if (!wrap) return;
+    wrap.querySelectorAll('.so-chart-overlay').forEach(e => e.remove());
+    const ov = document.createElement('div');
+    ov.className = 'so-chart-overlay absolute inset-0 flex flex-col items-center justify-center bg-white/80 z-10 gap-2';
+    ov.innerHTML = `<svg class="w-8 h-8 animate-spin text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 22 6.477 22 12h-4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+    </svg>
+    <p class="text-xs text-blue-400">Đang tải biểu đồ...</p>`;
+    wrap.appendChild(ov);
+  }
+
+  function _hideChartLoader(wrapId) {
+    const wrap = _el(wrapId);
+    if (!wrap) return;
+    wrap.querySelectorAll('.so-chart-overlay').forEach(e => e.remove());
+  }
 
   // ── Sub-tab switching ────────────────────────────────────────────────────
   function _activateSubTab(which) {
@@ -47,6 +81,17 @@ const SaleOutRenderer = (() => {
     const container = _el('saleout-sidebar-content');
     if (!container) return;
 
+    if (_isLoading) {
+      container.innerHTML = `<div class="flex flex-col items-center py-6 gap-2">
+        <svg class="w-5 h-5 animate-spin text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 22 6.477 22 12h-4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+        </svg>
+        <p class="text-xs text-blue-400 text-center">Đang tải...</p>
+      </div>`;
+      return;
+    }
+
     if (_saleoutData.length === 0) {
       container.innerHTML = '<p class="text-xs text-gray-400 italic p-2">Chưa có dữ liệu Sale Out</p>';
       return;
@@ -61,39 +106,45 @@ const SaleOutRenderer = (() => {
     if (monthSearchEl)   _soSearchQueries.month   = monthSearchEl.value;
     if (productSearchEl) _soSearchQueries.product = productSearchEl.value;
 
+    // Màu cho từng bộ lọc
+    const _SC = {
+      month:   { h: '#2563EB', b: '#3B82F6', bg: '#EFF6FF' },
+      product: { h: '#059669', b: '#10B981', bg: '#ECFDF5' },
+    };
+
     function _pill(type, value) {
+      const pc = _SC[type] || _SC.month;
       const active = _filters[type === 'month' ? 'months' : 'shortNames'];
       const isActive = active.length === 0 || active.includes(value);
-      const cls = isActive
-        ? 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
-        : 'bg-white text-gray-500 border-gray-200 hover:border-blue-400 hover:text-blue-600';
-      return `<button class="so-pill text-xs px-1.5 py-0.5 rounded border transition-colors ${cls}"
+      const activeStyle = `background:${pc.h};color:white;border-color:${pc.h}`;
+      const inactiveStyle = 'background:white;color:#6B7280;border-color:#E5E7EB';
+      return `<button class="so-pill text-xs px-1.5 py-0.5 rounded border transition-colors"
+                style="${isActive ? activeStyle : inactiveStyle}"
                 data-type="${type}" data-value="${value.replace(/"/g,'&quot;')}">${value}</button>`;
     }
 
-    container.innerHTML = `
-      <div class="mb-3">
-        <div class="flex items-center justify-between mb-1.5">
-          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Tháng</p>
-          <button class="so-clear text-xs text-blue-500 hover:underline" data-type="month">Tất cả</button>
-        </div>
-        <input type="text" class="so-search w-full text-xs border border-gray-200 rounded px-2 py-1 mb-1.5 outline-none focus:border-blue-400 bg-white placeholder-gray-300"
-               data-type="month" placeholder="🔍 Tìm..." value="${_soSearchQueries.month.replace(/"/g,'&quot;')}">
-        <div id="so-month-pills" class="flex flex-wrap gap-1 max-h-44 overflow-y-auto">
-          ${allMonths.map(m => _pill('month', m)).join('')}
-        </div>
-      </div>
-      <div>
-        <div class="flex items-center justify-between mb-1.5">
-          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sản phẩm</p>
-          <button class="so-clear text-xs text-blue-500 hover:underline" data-type="product">Tất cả</button>
-        </div>
-        <input type="text" class="so-search w-full text-xs border border-gray-200 rounded px-2 py-1 mb-1.5 outline-none focus:border-blue-400 bg-white placeholder-gray-300"
-               data-type="product" placeholder="🔍 Tìm..." value="${_soSearchQueries.product.replace(/"/g,'&quot;')}">
-        <div id="so-product-pills" class="flex flex-wrap gap-1 max-h-52 overflow-y-auto">
-          ${allProducts.map(p => _pill('product', p)).join('')}
-        </div>
-      </div>`;
+    function _filterCard(type, title, pillsId, searchVal, pills) {
+      const pc = _SC[type];
+      return `
+        <div class="rounded-xl mb-3 overflow-hidden shadow-sm" style="border:2px solid ${pc.b};background:${pc.bg}">
+          <div class="flex items-center justify-between px-3 py-2" style="background:${pc.h}">
+            <span class="font-bold text-white text-sm tracking-wide">${title}</span>
+            <button class="so-clear text-white/70 hover:text-white text-xs font-semibold transition-colors" data-type="${type}">Tất cả</button>
+          </div>
+          <div class="px-2 pt-2 pb-1">
+            <input type="text" class="so-search w-full text-xs rounded px-2 py-1 mb-1.5 outline-none bg-white placeholder-gray-300"
+                   style="border:1.5px solid ${pc.b}80"
+                   data-type="${type}" placeholder="🔍 Tìm..." value="${searchVal.replace(/"/g,'&quot;')}">
+            <div id="${pillsId}" class="flex flex-wrap gap-1 max-h-44 overflow-y-auto">
+              ${pills}
+            </div>
+          </div>
+        </div>`;
+    }
+
+    container.innerHTML =
+      _filterCard('month',   'Tháng',    'so-month-pills',   _soSearchQueries.month,   allMonths.map(m => _pill('month', m)).join('')) +
+      _filterCard('product', 'Sản phẩm', 'so-product-pills', _soSearchQueries.product, allProducts.map(p => _pill('product', p)).join(''));
 
     container.querySelectorAll('.so-pill').forEach(btn => {
       btn.addEventListener('click', () => _togglePill(btn.dataset.type, btn.dataset.value));
@@ -186,25 +237,28 @@ const SaleOutRenderer = (() => {
   // colHeaderRowHtml : <tr> của hàng tiêu đề cột
   // tbodyHtml       : nội dung <tbody>
   function _tableWrap(borderColor, headerBg, label, badge, summaryRowHtml, colHeaderRowHtml, tbodyHtml) {
-    return `<div class="so-table-wrap bg-white rounded-xl border ${borderColor} shadow-sm overflow-auto mb-4" style="max-height:320px">
-      <div class="px-4 py-2 ${headerBg} border-b flex items-center gap-2 flex-shrink-0"
-           style="position:sticky;top:0;z-index:30">
-        <span class="text-xs font-semibold uppercase tracking-wide">${label}</span>
-        ${badge ? `<span class="text-xs opacity-60">${badge}</span>` : ''}
+    return `<div class="so-table-wrap rounded-xl border ${borderColor} shadow-sm mb-4 overflow-hidden">
+      <!-- Tiêu đề nằm NGOÀI vùng overflow: không bị cuộn ngang -->
+      <div class="px-4 py-2.5 ${headerBg} border-b flex items-center gap-2">
+        <span class="text-xs font-bold uppercase tracking-wide">${label}</span>
+        ${badge ? `<span class="text-xs opacity-70">${badge}</span>` : ''}
       </div>
-      <table class="w-full text-sm border-collapse">
-        <colgroup>
-          <col style="width:100px;min-width:100px">
-          <col style="width:140px;min-width:140px">
-          <col style="width:120px;min-width:120px">
-          <col style="width:90px;min-width:90px">
-        </colgroup>
-        <thead style="position:sticky;top:33px;z-index:20">
-          ${summaryRowHtml}
-          ${colHeaderRowHtml}
-        </thead>
-        <tbody>${tbodyHtml}</tbody>
-      </table>
+      <!-- Vùng cuộn chỉ chứa bảng -->
+      <div style="overflow:auto;max-height:285px">
+        <table class="w-full text-sm border-collapse bg-white">
+          <colgroup>
+            <col style="width:100px;min-width:100px">
+            <col style="width:140px;min-width:140px">
+            <col style="width:120px;min-width:120px">
+            <col style="width:90px;min-width:90px">
+          </colgroup>
+          <thead style="position:sticky;top:0;z-index:20">
+            ${summaryRowHtml}
+            ${colHeaderRowHtml}
+          </thead>
+          <tbody>${tbodyHtml}</tbody>
+        </table>
+      </div>
     </div>`;
   }
 
@@ -247,6 +301,8 @@ const SaleOutRenderer = (() => {
   function _renderSaleOutTable() {
     const container = _el('saleout-table-container');
     if (!container) return;
+
+    if (_isLoading) { container.innerHTML = _spinnerHtml('lg'); return; }
 
     if (_saleoutData.length === 0) {
       container.innerHTML = `<div class="flex flex-col items-center justify-center py-16 text-gray-400">
@@ -325,10 +381,10 @@ const SaleOutRenderer = (() => {
 
     const colRates  = months.map((_m, idx) => cumulColRate(idx));
     const grandTotal = cumulColRate(months.length - 1);
-    const summaryRow = `<tr class="bg-rose-50 border-b border-rose-200">
-      <td colspan="3" class="px-3 py-2 text-xs font-bold text-rose-800 sticky left-0 z-[10] bg-rose-50">% lỗi theo tháng (LK)</td>
-      <td class="px-3 py-2 text-right text-xs font-bold sticky left-[360px] z-[10] ${_rateBg(grandTotal)||'bg-rose-100'} ${_rateTxt(grandTotal)} border-r border-rose-200">${fmtR(grandTotal)}</td>
-      ${colRates.map(r=>`<td class="px-3 py-2 text-right text-xs font-bold ${_rateBg(r)} ${_rateTxt(r)}">${fmtR(r)}</td>`).join('')}
+    const summaryRow = `<tr class="bg-rose-100 border-b-2 border-rose-300">
+      <td colspan="3" class="px-3 py-2 text-xs font-bold text-rose-900 sticky left-0 z-[15] bg-rose-100 whitespace-nowrap">% lỗi theo tháng (LK)</td>
+      <td class="px-3 py-2 text-right text-xs font-bold sticky left-[360px] z-[15] bg-rose-200 ${_rateTxt(grandTotal)} border-r-2 border-rose-300">${fmtR(grandTotal)}</td>
+      ${colRates.map(r=>`<td class="px-3 py-2 text-right text-xs font-bold ${_rateBg(r)||'bg-rose-50'} ${_rateTxt(r)}">${fmtR(r)}</td>`).join('')}
     </tr>`;
     const colHeaderRow = _thRow(months, '% lỗi theo model', 'bg-rose-700', 'bg-rose-800');
 
@@ -364,10 +420,10 @@ const SaleOutRenderer = (() => {
 
     const colTotals  = months.map(m => products.reduce((s,[sn])=>s+cnt(sn,m),0));
     const grandTotal = colTotals.reduce((a,b)=>a+b,0);
-    const summaryRow = `<tr class="bg-orange-50 border-b border-orange-200">
-      <td colspan="3" class="px-3 py-2 text-xs font-bold text-orange-800 sticky left-0 z-[10] bg-orange-50">Tổng lỗi theo tháng</td>
-      <td class="px-3 py-2 text-right text-xs font-bold sticky left-[360px] z-[10] text-orange-900 bg-orange-100 border-r border-orange-200">${grandTotal||'—'}</td>
-      ${colTotals.map(v=>`<td class="px-3 py-2 text-right text-xs font-bold text-orange-800">${v||'—'}</td>`).join('')}
+    const summaryRow = `<tr class="bg-orange-100 border-b-2 border-orange-300">
+      <td colspan="3" class="px-3 py-2 text-xs font-bold text-orange-900 sticky left-0 z-[15] bg-orange-100 whitespace-nowrap">Tổng lỗi theo tháng</td>
+      <td class="px-3 py-2 text-right text-xs font-bold sticky left-[360px] z-[15] text-orange-900 bg-orange-200 border-r-2 border-orange-300">${grandTotal||'—'}</td>
+      ${colTotals.map(v=>`<td class="px-3 py-2 text-right text-xs font-bold text-orange-800 bg-orange-50">${v||'—'}</td>`).join('')}
     </tr>`;
     const colHeaderRow = _thRow(months, 'Tổng lỗi theo model', 'bg-orange-600', 'bg-orange-700');
 
@@ -396,10 +452,10 @@ const SaleOutRenderer = (() => {
     for (const r of filtered) { colTotals[r.month]=(colTotals[r.month]||0)+(Number(r.value)||0); grandTotal+=Number(r.value)||0; }
     const fmt = n => n.toLocaleString('vi-VN');
 
-    const summaryRow = `<tr class="bg-amber-50 border-b border-amber-200">
-      <td colspan="3" class="px-3 py-2 text-xs font-bold text-amber-800 sticky left-0 z-[10] bg-amber-50">Tổng theo tháng</td>
-      <td class="px-3 py-2 text-right text-xs font-bold sticky left-[360px] z-[10] text-amber-900 bg-amber-100 border-r border-amber-200">${fmt(grandTotal)}</td>
-      ${months.map(m=>`<td class="px-3 py-2 text-right text-xs font-bold text-amber-800">${fmt(colTotals[m]||0)}</td>`).join('')}
+    const summaryRow = `<tr class="bg-amber-100 border-b-2 border-amber-300">
+      <td colspan="3" class="px-3 py-2 text-xs font-bold text-amber-900 sticky left-0 z-[15] bg-amber-100 whitespace-nowrap">Tổng theo tháng</td>
+      <td class="px-3 py-2 text-right text-xs font-bold sticky left-[360px] z-[15] text-amber-900 bg-amber-200 border-r-2 border-amber-300">${fmt(grandTotal)}</td>
+      ${months.map(m=>`<td class="px-3 py-2 text-right text-xs font-bold text-amber-800 bg-amber-50">${fmt(colTotals[m]||0)}</td>`).join('')}
     </tr>`;
     const colHeaderRow = _thRow(months, 'Tổng theo model', 'bg-blue-600', 'bg-blue-700');
 
@@ -427,6 +483,14 @@ const SaleOutRenderer = (() => {
   }
 
   function _renderRateTables() {
+    if (_isLoading) {
+      const pC = _el('rate-by-product-table');
+      const mC = _el('rate-by-month-table');
+      if (pC) pC.innerHTML = _spinnerHtml('sm');
+      if (mC) mC.innerHTML = _spinnerHtml('sm');
+      return { byProduct: [], byMonth: [] };
+    }
+
     const byProduct = ErrorRateService.calcByProduct(_errorData, _saleoutData, _filters);
     const byMonth   = ErrorRateService.calcByMonth(_errorData, _saleoutData, _filters);
 
@@ -509,6 +573,14 @@ const SaleOutRenderer = (() => {
     if (_chartProduct) { _chartProduct.destroy(); _chartProduct = null; }
     if (_chartMonth)   { _chartMonth.destroy();   _chartMonth   = null; }
 
+    if (_isLoading) {
+      _showChartLoader('rate-by-product-chart-wrap');
+      _showChartLoader('rate-by-month-chart-wrap');
+      return;
+    }
+    _hideChartLoader('rate-by-product-chart-wrap');
+    _hideChartLoader('rate-by-month-chart-wrap');
+
     const ctxP = _el('rate-by-product-chart');
     const ctxM = _el('rate-by-month-chart');
 
@@ -573,16 +645,25 @@ const SaleOutRenderer = (() => {
         },
         options: {
           responsive: true, maintainAspectRatio: false,
+          layout: { padding: { top: 24 } },
           plugins: {
             legend: { display: false },
             datalabels: {
               formatter: v => v !== null ? v.toFixed(2) + '%' : '',
-              font: { size: 9 }, color: '#1D4ED8',
+              font: { size: 9, weight: '600' },
+              color: '#1D4ED8',
               anchor: 'top', align: 'top',
+              offset: 4,
+              clamp: true,
             },
           },
           scales: {
-            y: { title: { display: true, text: 'TLL (%)', font: { size: 10 } }, beginAtZero: true },
+            y: {
+              title: { display: true, text: 'TLL (%)', font: { size: 10 } },
+              beginAtZero: true,
+              grace: '5%',
+              ticks: { callback: v => v + '%', font: { size: 10 } },
+            },
           },
         },
         plugins: typeof ChartDataLabels !== 'undefined' ? [ChartDataLabels] : [],
@@ -592,10 +673,21 @@ const SaleOutRenderer = (() => {
 
   // ── Public API ───────────────────────────────────────────────────────────
   function setData(saleoutData, errorData) {
+    _isLoading   = false;
     _saleoutData = saleoutData || [];
     _errorData   = errorData   || [];
     _filters     = { months: [], shortNames: [] };
     _tableRendered = false;
+  }
+
+  function setLoading(bool) {
+    _isLoading = bool;
+    renderSidebar();
+    const soSection = _el('saleout-section');
+    if (soSection && soSection.style.display !== 'none') {
+      if (_activeSubTab === 'data') _renderSaleOutTable();
+      else _renderRateSection();
+    }
   }
 
   function render() {
@@ -609,9 +701,49 @@ const SaleOutRenderer = (() => {
     if (window._setSubTabActive) window._setSubTabActive(activeId);
   }
 
+  function _downloadChart(chart, filename, titleText) {
+    if (!chart) return;
+    const src = chart.canvas;
+    const headerH = titleText ? 36 : 0;
+    const tmp = document.createElement('canvas');
+    tmp.width  = src.width;
+    tmp.height = src.height + headerH;
+    const ctx2 = tmp.getContext('2d');
+    ctx2.fillStyle = '#ffffff';
+    ctx2.fillRect(0, 0, tmp.width, tmp.height);
+    if (headerH) {
+      ctx2.fillStyle = '#f1f5f9';
+      ctx2.fillRect(0, 0, tmp.width, headerH);
+      ctx2.strokeStyle = '#cbd5e1';
+      ctx2.lineWidth = 1;
+      ctx2.beginPath();
+      ctx2.moveTo(0, headerH);
+      ctx2.lineTo(tmp.width, headerH);
+      ctx2.stroke();
+      ctx2.fillStyle = '#1e3a5f';
+      ctx2.font = 'bold 13px Arial, sans-serif';
+      ctx2.textBaseline = 'middle';
+      ctx2.fillText(titleText, 12, headerH / 2);
+    }
+    ctx2.drawImage(src, 0, headerH);
+    const link = document.createElement('a');
+    link.download = filename;
+    link.href = tmp.toDataURL('image/png');
+    link.click();
+  }
+
   function init() {
     _el('subtab-saleout-data')?.addEventListener('click', () => _activateSubTab('data'));
     _el('subtab-saleout-rate')?.addEventListener('click', () => _activateSubTab('rate'));
+
+    _el('btn-download-product-chart')?.addEventListener('click', () => {
+      const orderLabel = _productOrder === 'asc' ? 'Thấp nhất' : 'Cao nhất';
+      const topNLabel  = _productTopN > 0 ? `Top ${_productTopN}` : 'Tất cả';
+      _downloadChart(_chartProduct, 'TLL_theo_san_pham.png', `Biểu đồ TLL theo sản phẩm  |  ${orderLabel}  |  ${topNLabel}`);
+    });
+    _el('btn-download-month-chart')?.addEventListener('click', () => {
+      _downloadChart(_chartMonth, 'TLL_theo_thang.png', 'Biểu đồ TLL theo tháng');
+    });
 
     function _syncProductControls() {
       const topnVal  = String(_productTopN);
@@ -636,5 +768,8 @@ const SaleOutRenderer = (() => {
     });
   }
 
-  return { init, setData, render, renderSidebar };
+  function getFilters()    { return _filters; }
+  function getActiveSubTab() { return _activeSubTab; }
+
+  return { init, setData, render, renderSidebar, setLoading, getFilters, getActiveSubTab };
 })();

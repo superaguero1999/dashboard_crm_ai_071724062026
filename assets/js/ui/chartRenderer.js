@@ -232,9 +232,17 @@ const ChartRenderer = (() => {
 
   function download(filename = 'chart.png') {
     if (!_chart) return;
+    const src = _chart.canvas;
+    const tmp = document.createElement('canvas');
+    tmp.width  = src.width;
+    tmp.height = src.height;
+    const ctx2 = tmp.getContext('2d');
+    ctx2.fillStyle = '#ffffff';
+    ctx2.fillRect(0, 0, tmp.width, tmp.height);
+    ctx2.drawImage(src, 0, 0);
     const link = document.createElement('a');
     link.download = filename;
-    link.href = _chart.toBase64Image();
+    link.href = tmp.toDataURL('image/png');
     link.click();
   }
 

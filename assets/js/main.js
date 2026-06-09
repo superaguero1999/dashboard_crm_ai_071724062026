@@ -1,20 +1,54 @@
 // ─── App State ─────────────────────────────────────────────────────────────
-let _allData     = [];
-let _saleoutData = [];
+let _activeDataset = 'spm1'; // 'spm1' | 'spm2'
+let _spm1Data = [], _spm1Saleout = [];
+let _spm2Data = [], _spm2Saleout = [];
+let _allData     = []; // alias → active dataset
+let _saleoutData = []; // alias → active saleout
 let _pivotResult = null;
+let _isSpm2Loading = true; // SPM2 loads in background; true until done
+
+// ── Switch dataset context ──────────────────────────────────────────────────
+function switchDataset(ds) {
+  _activeDataset = ds;
+  DataService.setNamespace(ds);
+  SaleOutService.setNamespace(ds);
+  SlicerService.setNamespace(ds);
+  _allData     = ds === 'spm2' ? _spm2Data    : _spm1Data;
+  _saleoutData = ds === 'spm2' ? _spm2Saleout : _spm1Saleout;
+}
+
+// ── SPM2 tab loading badge ───────────────────────────────────────────────
+function _setSpm2TabLoading(on) {
+  const tab = document.getElementById('tab-spm2');
+  if (!tab) return;
+  tab.querySelectorAll('.tab-spin').forEach(e => e.remove());
+  if (on) {
+    const s = document.createElement('span');
+    s.className = 'tab-spin inline-block w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin ml-1.5 align-middle';
+    tab.appendChild(s);
+  }
+}
 
 // ─── Load dữ liệu ─────────────────────────────────────────────────────────
 async function loadData() {
+  SaleOutRenderer.setLoading(true);
+  const countEl = document.getElementById('data-count');
+  if (countEl) countEl.innerHTML = `<span class="inline-block w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin align-middle mr-1"></span>Đang tải...`;
+  // Luôn load SPM1 (không ảnh hưởng namespace hiện tại)
+  DataService.setNamespace('spm1');
   const loadingEl = document.getElementById('data-loading');
   if (loadingEl) loadingEl.style.display = '';
   try {
-    _allData = await DataService.fetchAll();
+    _spm1Data = await DataService.fetchAll();
   } catch (_) {
-    _allData = [];
+    _spm1Data = [];
   }
   if (loadingEl) loadingEl.style.display = 'none';
-  await DataService.syncViews();    // kéo views từ NocoDB về (nếu đã cấu hình)
-  await DataService.syncSlicers(); // kéo slicers từ NocoDB về (nếu đã cấu hình)
+  await DataService.syncViews();
+  await DataService.syncSlicers();
+  // Restore namespace
+  DataService.setNamespace(_activeDataset);
+  _allData = _activeDataset === 'spm2' ? _spm2Data : _spm1Data;
   renderSavedViews();
   updateDataStats();
   refreshPivot();
@@ -22,14 +56,46 @@ async function loadData() {
   const dashSection = document.getElementById('dashboard-section');
   if (dashSection && dashSection.style.display !== 'none') DashboardRenderer.render();
   await loadSaleOutData();
+  // Load SPM2 data in background (không block UI)
+  _loadSpm2DataBackground();
+}
+
+async function _loadSpm2DataBackground() {
+  _isSpm2Loading = true;
+  _setSpm2TabLoading(true);
+  DataService.setNamespace('spm2');
+  SaleOutService.setNamespace('spm2');
+  try { _spm2Data    = await DataService.fetchAll();    } catch (_) { _spm2Data    = []; }
+  try { _spm2Saleout = await SaleOutService.fetchAll(); } catch (_) { _spm2Saleout = []; }
+  // Sync views + slicers cho SPM2 (cần gọi trong khi namespace vẫn là spm2)
+  await DataService.syncViews();
+  await DataService.syncSlicers();
+  _isSpm2Loading = false;
+  _setSpm2TabLoading(false);
+  // Restore namespace
+  DataService.setNamespace(_activeDataset);
+  SaleOutService.setNamespace(_activeDataset);
+  if (_activeDataset === 'spm2') {
+    _allData = _spm2Data;
+    _saleoutData = _spm2Saleout;
+    updateDataStats();
+    SaleOutRenderer.setData(_saleoutData, _allData);
+    const soSection = document.getElementById('saleout-section');
+    if (soSection && soSection.style.display !== 'none') SaleOutRenderer.render();
+    else SaleOutRenderer.renderSidebar();
+  }
 }
 
 async function loadSaleOutData() {
+  SaleOutRenderer.setLoading(true);
+  SaleOutService.setNamespace('spm1');
   try {
-    _saleoutData = await SaleOutService.fetchAll();
+    _spm1Saleout = await SaleOutService.fetchAll();
   } catch (_) {
-    _saleoutData = [];
+    _spm1Saleout = [];
   }
+  SaleOutService.setNamespace(_activeDataset);
+  _saleoutData = _activeDataset === 'spm2' ? _spm2Saleout : _spm1Saleout;
   SaleOutRenderer.setData(_saleoutData, _allData);
   const soSection = document.getElementById('saleout-section');
   if (soSection && soSection.style.display !== 'none') SaleOutRenderer.render();
@@ -173,6 +239,7 @@ function setupTabs() {
   const tabPivot         = document.getElementById('tab-pivot');
   const tabDashboard     = document.getElementById('tab-dashboard');
   const tabSaleout       = document.getElementById('tab-saleout');
+  const tabSpm2          = document.getElementById('tab-spm2');
   const pivotSection     = document.getElementById('pivot-section');
   const dashSection      = document.getElementById('dashboard-section');
   const saleoutSection   = document.getElementById('saleout-section');
@@ -180,22 +247,34 @@ function setupTabs() {
   const sidebarDashboard = document.getElementById('sidebar-dashboard');
   const sidebarSaleout   = document.getElementById('sidebar-saleout');
 
-  const activeClass   = ['border-blue-600', 'text-blue-600'];
-  const inactiveClass = ['border-transparent', 'text-gray-500', 'hover:text-gray-700'];
+  const THEME = {
+    spm1: { active: ['border-blue-600',   'text-blue-600',   'bg-blue-100']   },
+    spm2: { active: ['border-violet-600', 'text-violet-600', 'bg-violet-100'] },
+  };
+  const inactiveClass  = ['border-transparent', 'text-gray-500', 'hover:text-gray-700'];
+  const ALL_ACTIVE_CLS = [...THEME.spm1.active, ...THEME.spm2.active];
+  const MAIN_TABS      = [tabSaleout, tabSpm2, tabPivot, tabDashboard];
+  const ALL_SUBTABS    = ['subtab-saleout-rate', 'subtab-saleout-data', 'subtab-pivot', 'subtab-dashboard'];
 
-  const ALL_SUBTABS = ['subtab-saleout-rate', 'subtab-saleout-data', 'subtab-pivot', 'subtab-dashboard'];
+  function _getActiveClass() { return THEME[_activeDataset]?.active || THEME.spm1.active; }
+
+  function setMainTabActive(tabEl) {
+    const active = _getActiveClass();
+    MAIN_TABS.forEach(t => {
+      if (!t) return;
+      t.classList.remove(...ALL_ACTIVE_CLS);
+      t.classList.add(...inactiveClass);
+    });
+    if (tabEl) { tabEl.classList.add(...active); tabEl.classList.remove(...inactiveClass); }
+  }
 
   function setSubTabActive(id) {
+    const active = _getActiveClass();
     ALL_SUBTABS.forEach(tid => {
       const el = document.getElementById(tid);
       if (!el) return;
-      if (tid === id) {
-        el.classList.add(...activeClass);
-        el.classList.remove(...inactiveClass);
-      } else {
-        el.classList.remove(...activeClass);
-        el.classList.add(...inactiveClass);
-      }
+      if (tid === id) { el.classList.remove(...ALL_ACTIVE_CLS); el.classList.add(...active);        el.classList.remove(...inactiveClass); }
+      else            { el.classList.remove(...ALL_ACTIVE_CLS); el.classList.add(...inactiveClass); }
     });
   }
 
@@ -208,17 +287,6 @@ function setupTabs() {
     sidebarDashboard.style.display = which === 'dashboard' ? '' : 'none';
     sidebarSaleout.style.display   = which === 'saleout'   ? '' : 'none';
 
-    [tabPivot, tabDashboard, tabSaleout].forEach(t => {
-      if (!t) return;
-      t.classList.remove(...activeClass);
-      t.classList.add(...inactiveClass);
-    });
-    const activeTab = { pivot: tabPivot, dashboard: tabDashboard, saleout: tabSaleout }[which];
-    if (activeTab) {
-      activeTab.classList.add(...activeClass);
-      activeTab.classList.remove(...inactiveClass);
-    }
-
     if (which === 'pivot')     setSubTabActive('subtab-pivot');
     if (which === 'dashboard') setSubTabActive('subtab-dashboard');
 
@@ -227,9 +295,25 @@ function setupTabs() {
       DashboardRenderer.render();
     }
     if (which === 'saleout') {
-      SaleOutRenderer.setData(_saleoutData, _allData);
-      SaleOutRenderer.render();
+      if (_activeDataset === 'spm2' && _isSpm2Loading) {
+        SaleOutRenderer.setLoading(true);
+      } else {
+        SaleOutRenderer.setData(_saleoutData, _allData);
+        SaleOutRenderer.render();
+      }
     }
+    if (which === 'pivot') {
+      renderSavedViews();
+      refreshPivot();
+    }
+  }
+
+  function activateDataset(ds, mainTabEl) {
+    switchDataset(ds);
+    setMainTabActive(mainTabEl);
+    updateDataStats();
+    // Dataset tab luôn trở về saleout view
+    activate('saleout');
   }
 
   // Expose globals để saleOutRenderer có thể dùng
@@ -238,12 +322,14 @@ function setupTabs() {
 
   tabPivot?.addEventListener('click',     () => activate('pivot'));
   tabDashboard?.addEventListener('click', () => activate('dashboard'));
-  tabSaleout?.addEventListener('click',   () => activate('saleout'));
+  tabSaleout?.addEventListener('click',   () => activateDataset('spm1', tabSaleout));
+  tabSpm2?.addEventListener('click',      () => activateDataset('spm2', tabSpm2));
 
   // Click handlers cho sub-tab bar cố định
   document.getElementById('subtab-pivot')?.addEventListener('click',     () => activate('pivot'));
   document.getElementById('subtab-dashboard')?.addEventListener('click', () => activate('dashboard'));
 
+  setMainTabActive(tabSaleout);
   activate('saleout');
 }
 
@@ -293,6 +379,30 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => { syncBtn.textContent = orig; syncBtn.disabled = false; }, 3000);
         console.error('[SyncBtn]', e.message, e);
         alert('Lỗi đồng bộ: ' + e.message + '\n\nKiểm tra F12 → Console để xem chi tiết.');
+      }
+    });
+  }
+
+  // Export Excel button
+  const exportBtn = document.getElementById('btn-export-excel');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+      const ds = _activeDataset === 'spm2' ? 'SPM2' : 'SPM1';
+
+      // Detect active section by DOM visibility
+      const pivotVisible   = document.getElementById('pivot-section')?.style.display !== 'none';
+      const dashVisible    = document.getElementById('dashboard-section')?.style.display !== 'none';
+      const saleDataVisible = document.getElementById('saleout-data-subsection')?.style.display !== 'none';
+
+      if (pivotVisible) {
+        ExportService.exportPivot(_pivotResult, ds);
+      } else if (dashVisible) {
+        ExportService.exportRawData(_allData, ds);
+      } else if (saleDataVisible) {
+        ExportService.exportSaleOut(_saleoutData, ds);
+      } else {
+        // TLL tab (default)
+        ExportService.exportTLL(_allData, _saleoutData, SaleOutRenderer.getFilters(), ds);
       }
     });
   }
