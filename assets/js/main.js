@@ -436,6 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
   SaleOutImport.init();
   EcnImport.init();
   ChatbotUI.init();
+  ChatbotService.loadKey(); // load Groq key từ NocoDB → gọi Groq trực tiếp từ browser
   SaleOutRenderer.init();
   setupSavedViewsControls();
   renderSavedViews();

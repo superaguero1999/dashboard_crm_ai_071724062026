@@ -321,5 +321,6 @@ const DataService = (() => {
            syncViews, pushViewsToCloud, savePivotView, loadPivotViews, deletePivotView,
            syncSlicers, pushSlicersToCloud, saveSlicerData,
            syncSaleoutFilters, pushSaleoutFiltersToCloud, saveSaleoutFilterData,
-           isConfigured, isConfigStoreReady };
+           isConfigured, isConfigStoreReady,
+           configGet: _configGet, configSet: _configSet };
 })();

@@ -4,6 +4,20 @@ const ChatbotService = (() => {
   let _history = [];
   let _lastProductFilterError = null; // flag cho read_dashboard_groups biết filter_product có thất bại không
   let _disambiguateCallback   = null; // callback để UI hiện disambiguation popup khi có nhiều match
+  let _groqKeyDirect = null;          // key load từ NocoDB, dùng để gọi Groq trực tiếp từ browser
+
+  // Load Groq key từ NocoDB config table (chạy 1 lần khi app khởi động)
+  async function loadKey() {
+    try {
+      const stored = await DataService.configGet('groq_api_key');
+      if (stored && typeof stored === 'string' && stored.length > 20) {
+        _groqKeyDirect = stored;
+        console.log('[ChatbotService] Groq key loaded from NocoDB');
+      }
+    } catch (e) {
+      console.warn('[ChatbotService] Không load được key từ NocoDB:', e.message);
+    }
+  }
 
   // ── Delay helper ──────────────────────────────────────────────────────────
   function _delay(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -48,6 +62,23 @@ const ChatbotService = (() => {
   }
 
   // ── Month helpers ─────────────────────────────────────────────────────────
+  // Chuẩn hóa nhiều format → Ymmyy: "07/2026","07-2026","07.2026","7/26","tháng 7 2026" → "Y2607"
+  function _normalizeMonthCode(raw) {
+    if (!raw) return null;
+    raw = raw.trim();
+    if (/^Y\d{4}$/.test(raw)) return raw; // đã đúng format
+    // 07/2026, 07-2026, 07.2026, 7/2026, 7-2026, 07 2026
+    let m = raw.match(/^(\d{1,2})[\/\-\.\s](\d{4})$/);
+    if (m) return `Y${m[2].slice(-2)}${m[1].padStart(2, '0')}`;
+    // 2026/07, 2026-07
+    m = raw.match(/^(\d{4})[\/\-\.](\d{1,2})$/);
+    if (m) return `Y${m[1].slice(-2)}${m[2].padStart(2, '0')}`;
+    // tháng 7/2026, tháng 07/2026
+    m = raw.match(/th[aá]ng\s*(\d{1,2})[\/\-\.\s]*(\d{4})/i);
+    if (m) return `Y${m[2].slice(-2)}${m[1].padStart(2, '0')}`;
+    return raw;
+  }
+
   function _prevMonth(code) {
     const y = parseInt(code.slice(1, 3), 10);
     const m = parseInt(code.slice(3, 5), 10);
@@ -71,11 +102,12 @@ const ChatbotService = (() => {
   }
 
   async function _execSwitchSubTab({ tab }) {
+    const safeTab = tab || 'rate'; // default nếu AI không trả về tab hợp lệ
     const IDS    = { rate: 'subtab-saleout-rate', data: 'subtab-saleout-data', pivot: 'subtab-pivot', dashboard: 'subtab-dashboard' };
     const LABELS = { rate: 'Tỷ lệ lỗi', data: 'Dữ liệu chi tiết', pivot: 'Phân tích', dashboard: 'Biểu đồ' };
-    const el = document.getElementById(IDS[tab]);
-    await _simulateClick(el, `AI: Chuyển sang tab ${LABELS[tab] || tab}`);
-    return `Đã chuyển sang tab ${LABELS[tab] || tab}`;
+    const el = document.getElementById(IDS[safeTab]);
+    await _simulateClick(el, `AI: Chuyển sang tab ${LABELS[safeTab] || safeTab}`);
+    return `Đã chuyển sang tab ${LABELS[safeTab] || safeTab}`;
   }
 
   function _isDashboard() {
@@ -134,8 +166,8 @@ const ChatbotService = (() => {
   }
 
   async function _execFilterMonth({ month }) {
-    // AI có thể trả về 1 tháng ("Y2507") hoặc nhiều tháng cách dấu phẩy ("Y2507,Y2508,Y2509")
-    const incoming = (month || '').split(',').map(m => m.trim()).filter(Boolean);
+    // AI có thể trả về nhiều format: "Y2507", "07/2026", "07-2026", "07.2026", hoặc nhiều tháng cách dấu phẩy
+    const incoming = (month || '').split(',').map(m => _normalizeMonthCode(m)).filter(Boolean);
     if (!incoming.length) return 'Không xác định được tháng';
 
     // Validate: kiểm tra mã tháng có tồn tại trong dữ liệu không (phát hiện AI nhầm năm)
@@ -548,12 +580,33 @@ const ChatbotService = (() => {
       `${i + 1}. ${r.name}: lỗi=${r.errors} sale=${r.sale} TLL%=${fmt(r)}`
     ).join('\n');
 
-    // 6 tháng gần nhất (context đủ dùng; AI gọi tool để đọc thêm khi cần)
+    // Tất cả tháng có dữ liệu thực (sale>0 hoặc lỗi>0)
     const allUnfilteredMonths = window.AppState?.getAllMonthsData?.() || [];
     const allMonths = (allUnfilteredMonths.length ? allUnfilteredMonths : (s.tableByMonth || []));
+    const activeMonthsForStats = allMonths.filter(r => (r.sale || 0) > 0 || (r.errors || 0) > 0);
     const monthLines = allMonths.slice(-6).map(r =>
       `${r.month}: lỗi=${r.errors} sale=${r.sale} TLL%=${fmt(r)}`
     ).join('\n');
+
+    // Tính sẵn top/bottom để AI không cần tự tính (tránh hallucinate)
+    const _maxBy = (arr, fn) => arr.reduce((best, r) => fn(r) > fn(best) ? r : best, arr[0]);
+    const _minBy = (arr, fn) => arr.reduce((best, r) => fn(r) < fn(best) ? r : best, arr[0]);
+    const _monthRate = r => (r.sale > 0) ? r.errors / r.sale * 100 : null;
+    let quickStats = '';
+    if (activeMonthsForStats.length) {
+      const topSale   = _maxBy(activeMonthsForStats, r => r.sale || 0);
+      const topErrors = _maxBy(activeMonthsForStats, r => r.errors || 0);
+      const withSale  = activeMonthsForStats.filter(r => r.sale > 0);
+      const topRate   = withSale.length ? _maxBy(withSale, r => _monthRate(r)) : null;
+      const botRate   = withSale.length ? _minBy(withSale, r => _monthRate(r)) : null;
+      quickStats = [
+        `THỐNG KÊ NHANH (ĐÃ TÍNH SẴN — dùng trực tiếp, KHÔNG tự tính lại):`,
+        `• Sale cao nhất: ${_fmtMonth(topSale.month)} — ${topSale.sale} units`,
+        `• Lỗi nhiều nhất: ${_fmtMonth(topErrors.month)} — ${topErrors.errors} lỗi`,
+        topRate ? `• TLL% cao nhất: ${_fmtMonth(topRate.month)} — ${_monthRate(topRate).toFixed(2)}%` : '',
+        botRate ? `• TLL% thấp nhất: ${_fmtMonth(botRate.month)} — ${_monthRate(botRate).toFixed(2)}%` : '',
+      ].filter(Boolean).join('\n');
+    }
 
     // Nếu đang ở Dashboard tab — expose dữ liệu dashboard riêng
     if (s.activeSection === 'dashboard') {
@@ -583,9 +636,10 @@ const ChatbotService = (() => {
     const stateLines = [
       `Dataset:${s.activeDataset || 'spm1'} Tab hiện tại:${tabLabel[s.activeSubTab] || s.activeSubTab || 'rate'} Records:${s.recordCount || 0}`,
       filterParts.length ? `Filter:${filterParts.join('; ')}` : 'Filter: không có',
-      errorRankLines ? `\nTOP SẢN PHẨM LỖI NHIỀU NHẤT (xếp theo số lỗi):\n${errorRankLines}` : '',
-      productLines ? `\nBẢNG SẢN PHẨM THEO TLL% (xếp theo ${s.tableOrder === 'asc' ? 'TLL% thấp nhất' : 'TLL% cao nhất'}):\n${productLines}` : '',
-      monthLines   ? `\nBẢNG THÁNG:\n${monthLines}` : '',
+      quickStats        ? `\n${quickStats}` : '',
+      errorRankLines    ? `\nTOP SẢN PHẨM LỖI NHIỀU NHẤT (xếp theo số lỗi):\n${errorRankLines}` : '',
+      productLines      ? `\nBẢNG SẢN PHẨM THEO TLL% (xếp theo ${s.tableOrder === 'asc' ? 'TLL% thấp nhất' : 'TLL% cao nhất'}):\n${productLines}` : '',
+      monthLines        ? `\nBẢNG THÁNG (6 tháng gần nhất):\n${monthLines}` : '',
     ].filter(Boolean).join('\n');
 
     return SYSTEM_INSTRUCTION + '\n\n=== THỜI GIAN THỰC ===\n' + _timeCtx
@@ -668,6 +722,9 @@ ACTIONS:
 {"name":"analyze_trend","args":{"months":["Y2603","Y2604"]}} — xu hướng, bất thường, MoM, KHÔNG cần clear_filters
 
 MONTH FORMAT: Y + 2 số NĂM + 2 số THÁNG. 2025→25, 2026→26
+User có thể dùng nhiều cách viết — tất cả đều convert sang Ymmyy:
+"07/2026"→Y2607 | "07-2026"→Y2607 | "07.2026"→Y2607 | "tháng 7/2026"→Y2607 | "tháng 7 năm 2026"→Y2607
+"7/2026"→Y2607 | "7-2026"→Y2607 | "2026/07"→Y2607 | "2026-07"→Y2607
 ⛔ Khi user nói rõ năm → dùng đúng năm đó. "06/2025"→Y2506 (KHÔNG phải Y2606 dù năm hiện tại là 2026)
 Dải tháng: "08/2025 đến 02/2026"="Y2508,Y2509,Y2510,Y2511,Y2512,Y2601,Y2602"
 Quý: Q1=01-03, Q2=04-06, Q3=07-09, Q4=10-12
@@ -691,11 +748,16 @@ Ví dụ:
 "chi tiết lỗi S88"→switch_sub_tab(dashboard)+clear_filters+filter_product("S88")+read_dashboard_groups(by=category)
 "xu hướng TLL% 3 tháng gần nhất"→switch_sub_tab(rate)+filter_month(3 tháng cuối)+analyze_trend
 "SP S66 xu hướng lỗi 2025"→switch_sub_tab(rate)+clear_filters+filter_product("S66")+filter_month("Y2501,...,Y2512")+analyze_trend
-"dữ liệu saleout năm 2025"→switch_sub_tab(rate)+read_saleout_table({year:2025})
-"S66 saleout tháng 7/2025"→switch_sub_tab(rate)+clear_filters+filter_product("S66")+read_saleout_table({months:["Y2507"]})
-"Q1 2025 bao nhiêu lỗi"→switch_sub_tab(data)+clear_filters+filter_month("Y2501,Y2502,Y2503")+sum_errors
-"model nào lỗi nhiều nhất"(toàn kỳ)→switch_sub_tab(data)+clear_filters+read_top_products(by=errors)
+"dữ liệu saleout năm 2025"→switch_sub_tab(rate)+read_saleout_table({year:2025}), reply=""
+"S66 saleout tháng 7/2025"→switch_sub_tab(rate)+clear_filters+filter_product("S66")+read_saleout_table({months:["Y2507"]}), reply=""
+"Q1 2025 bao nhiêu lỗi"→switch_sub_tab(data)+clear_filters+filter_month("Y2501,Y2502,Y2503")+sum_errors, reply=""
+"model nào lỗi nhiều nhất"(toàn kỳ)→switch_sub_tab(data)+clear_filters+read_top_products(by=errors), reply=""
+"tháng nào sale nhiều nhất"→switch_sub_tab(rate)+read_saleout_table({}), reply="📌 Tháng X/Y có sale cao nhất: Z units" (đọc từ BẢNG THÁNG trong context, chỉ gọi tool nếu cần thêm data)
+"tháng nào TLL% cao nhất/thấp nhất"→switch_sub_tab(rate)+read_saleout_table({}), reply="📌 Tháng X/Y có TLL% cao nhất/thấp nhất: Z%"
+"SP nào sale nhiều nhất"→switch_sub_tab(rate)+read_top_products(by=sale), reply="📌 SP X có sale cao nhất: Z units"
 "hi"→{"actions":[],"reply":"Xin chào! Tôi có thể lọc, phân tích xu hướng, hoặc trả lời câu hỏi về số liệu."}
+
+DẠng câu hỏi "cái nào nhiều/ít nhất": LUÔN đặt câu trả lời trực tiếp vào reply (VD: "📌 Tháng 01/2026 có sale cao nhất: 6047"). Tool result là chi tiết bổ sung.
 Năm không hợp lệ (1015, 3000...)→KHÔNG gọi tools, reply giải thích. Tháng không tồn tại→reply hỏi lại.`;
 
   // ── Model rotation — ưu tiên model ổn định, tự động chuyển khi hết quota ──
@@ -738,8 +800,10 @@ Năm không hợp lệ (1015, 3000...)→KHÔNG gọi tools, reply giải thích
   // ── Groq API — JSON mode, model rotation + exponential backoff ───────────
   async function _callGroq(userText, onActionStep, onDisambiguate) {
     _disambiguateCallback = onDisambiguate || null;
-    const key = APP_CONFIG.chatbot?.groqApiKey;
-    const hasWorker = APP_CONFIG.chatbot?.groqWorkerUrl && !APP_CONFIG.chatbot.groqWorkerUrl.includes('YOUR-WORKER');
+    // Ưu tiên: key trực tiếp (browser→Groq, không qua worker, tránh IP block)
+    // Fallback: worker URL (nếu không có key trực tiếp)
+    const key = _groqKeyDirect || APP_CONFIG.chatbot?.groqApiKey;
+    const hasWorker = !key && APP_CONFIG.chatbot?.groqWorkerUrl && !APP_CONFIG.chatbot.groqWorkerUrl.includes('YOUR-WORKER');
     if (!key && !hasWorker) return null;
 
     const messages = [
@@ -761,7 +825,8 @@ Năm không hợp lệ (1015, 3000...)→KHÔNG gọi tools, reply giải thích
       let switched = false;
       for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
         const workerUrl = APP_CONFIG.chatbot?.groqWorkerUrl;
-        const useProxy = workerUrl && !workerUrl.includes('YOUR-WORKER');
+        // Dùng proxy CHỈ KHI không có key trực tiếp — nếu có key (từ NocoDB) thì gọi Groq thẳng
+        const useProxy = !key && workerUrl && !workerUrl.includes('YOUR-WORKER');
         const apiUrl = useProxy ? workerUrl : 'https://api.groq.com/openai/v1/chat/completions';
         const apiHeaders = useProxy
           ? { 'Content-Type': 'application/json' }
@@ -881,7 +946,7 @@ Năm không hợp lệ (1015, 3000...)→KHÔNG gọi tools, reply giải thích
     const allowTopN    = /\btop\s*\d|\bhiển thị\s+\d/.test(lower);
     const allowSort    = /sắp xếp|giảm dần|tăng dần/.test(lower);
     // filter_product: chỉ cho phép khi user đề cập đến sản phẩm/SP/model cụ thể
-    const allowProduct = /lọc\s*(sp|sản phẩm|model)|sản phẩm|tên sp|\bsp\b|\bmodel\b|kae|kad|kaq|kah|platinum|livotec|wpk|\bs\d{2,}\b/.test(lower);
+    const allowProduct = /lọc\s*(sp|sản phẩm|model)|sản phẩm|tên sp|\bsp\b|\bmodel\b|kae|kad|kaq|kah|platinum|livotec|wpk|\bs\d{2,}\b|\b[a-zđ]{1,4}\d+[a-z]*\b|\b\d+[a-z]+\b/.test(lower);
     const actions = rawActions.filter(a => {
       if (a.name === 'switch_main_tab' && !allowSwitch)  return false;
       // switch_sub_tab: cho phép AI tự động chuyển tab theo ngữ cảnh câu hỏi
@@ -933,14 +998,18 @@ Năm không hợp lệ (1015, 3000...)→KHÔNG gọi tools, reply giải thích
     // Ghép tất cả kết quả read-tools (tránh tool cuối xóa dữ liệu của tool trước)
     const sumResult = readResults.length ? readResults.join('\n\n') : null;
     const actionsRan = toolResults.length > 0;
-    const text = sumResult || reply || toolResults.filter(Boolean).join('\n')
+    // reply = câu trả lời trọng tâm của AI; sumResult = dữ liệu chi tiết từ tool
+    // Nếu cả hai đều có → hiện reply trước (trả lời đúng trọng tâm), sumResult sau (chi tiết)
+    // Nếu chỉ có sumResult → hiện sumResult (AI không cần tóm tắt thêm)
+    const text = (reply && sumResult) ? `${reply}\n\n${sumResult}`
+      : sumResult || reply || toolResults.filter(Boolean).join('\n')
       || (actionsRan ? 'Đã thực hiện.' : 'Xin lỗi, tôi chưa hiểu yêu cầu này. Bạn có thể hỏi lại hoặc thử diễn đạt khác không?');
     return { text, toolResults };
   }
 
   // ── Main sendMessage (Groq-only) ─────────────────────────────────────────
   async function sendMessage(userText, { onActionStep, onDisambiguate } = {}) {
-    const hasKey = !!APP_CONFIG.chatbot?.groqApiKey;
+    const hasKey = !!(_groqKeyDirect || APP_CONFIG.chatbot?.groqApiKey);
     const hasWorker = APP_CONFIG.chatbot?.groqWorkerUrl && !APP_CONFIG.chatbot.groqWorkerUrl.includes('YOUR-WORKER');
     if (!hasKey && !hasWorker) {
       return { source: 'none', message: 'Chưa cấu hình Groq API key hoặc Worker URL trong appConfig.js.' };
@@ -976,5 +1045,5 @@ Năm không hợp lệ (1015, 3000...)→KHÔNG gọi tools, reply giải thích
 
   function clearHistory() { _history = []; }
 
-  return { sendMessage, clearHistory };
+  return { sendMessage, clearHistory, loadKey };
 })();
