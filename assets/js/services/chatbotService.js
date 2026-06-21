@@ -268,9 +268,20 @@ const ChatbotService = (() => {
       if (s.selectedMonths?.length)   filterParts.push(`tháng ${s.selectedMonths.join(', ')}`);
       if (s.selectedProducts?.length) filterParts.push(`SP ${s.selectedProducts.join(', ')}`);
       const filterStr = filterParts.length ? `(${filterParts.join('; ')})` : '(toàn bộ)';
-      return rate !== null && rate !== undefined
-        ? `TLL% ${filterStr}: ${rate.toFixed(2)}%`
-        : 'Không tính được TLL% (thiếu dữ liệu sale out)';
+      if (rate !== null && rate !== undefined) {
+        return `TLL% ${filterStr}: ${rate.toFixed(2)}%`;
+      }
+      // Giải thích cụ thể tại sao không tính được
+      const byMonth = s.tableByMonth || [];
+      const totalErrors = byMonth.reduce((a, r) => a + (r.errors || 0), 0);
+      const missingMonths = byMonth.filter(r => (r.sale == null || r.sale === 0) && (r.errors || 0) > 0);
+      const hasMonths = byMonth.filter(r => (r.sale || 0) > 0);
+      const parts = [`⚠️ Chưa tính được TLL% ${filterStr}`];
+      if (totalErrors > 0) parts.push(`Số lỗi ghi nhận: ${totalErrors}`);
+      if (missingMonths.length) parts.push(`Thiếu Sale Out: ${missingMonths.map(r => _fmtMonth(r.month)).join(', ')} (${missingMonths.length} tháng)`);
+      if (!missingMonths.length && !hasMonths.length) parts.push('Lý do: chưa import dữ liệu Sale Out');
+      if (hasMonths.length) parts.push(`Đã có Sale Out: ${hasMonths.map(r => _fmtMonth(r.month)).join(', ')}`);
+      return parts.join('\n');
     } catch (_) { return 'Không tính được TLL%'; }
   }
 
@@ -497,21 +508,50 @@ const ChatbotService = (() => {
     if (s.selectedMonths?.length)   filterParts.push(`tháng: ${s.selectedMonths.join(', ')}`);
     if (s.selectedProducts?.length) filterParts.push(`SP: ${s.selectedProducts.join(', ')}`);
 
+    // Tính tháng hiện tại + các mốc tương đối (dùng giải nghĩa "tháng này", "tháng trước", v.v.)
+    const _now = new Date();
+    const _yy  = String(_now.getFullYear()).slice(-2);
+    const _mm  = String(_now.getMonth() + 1).padStart(2, '0');
+    const _curCode  = `Y${_yy}${_mm}`;
+    const _prevDate = new Date(_now.getFullYear(), _now.getMonth() - 1, 1);
+    const _prevCode = `Y${String(_prevDate.getFullYear()).slice(-2)}${String(_prevDate.getMonth() + 1).padStart(2, '0')}`;
+    const _prev2Date = new Date(_now.getFullYear(), _now.getMonth() - 2, 1);
+    const _prev2Code = `Y${String(_prev2Date.getFullYear()).slice(-2)}${String(_prev2Date.getMonth() + 1).padStart(2, '0')}`;
+    // 3 tháng gần nhất (bao gồm tháng hiện tại)
+    const _last3 = [_prev2Code, _prevCode, _curCode];
+    // Tạo danh sách N tháng gần nhất tính ngược từ tháng hiện tại
+    const _lastNMonths = (n) => {
+      const result = [];
+      for (let i = n - 1; i >= 0; i--) {
+        const d = new Date(_now.getFullYear(), _now.getMonth() - i, 1);
+        result.push(`Y${String(d.getFullYear()).slice(-2)}${String(d.getMonth() + 1).padStart(2, '0')}`);
+      }
+      return result;
+    };
+    const _timeCtx = [
+      `Ngày hôm nay: ${_now.getDate()}/${_now.getMonth() + 1}/${_now.getFullYear()}`,
+      `Tháng này = ${_curCode} | Tháng trước = ${_prevCode} | 2 tháng trước = ${_prev2Code}`,
+      `3 tháng gần nhất = ${_last3.join(', ')} | 6 tháng gần nhất = ${_lastNMonths(6).join(', ')}`,
+      `⏰ Khi user nói "tháng này"/"tháng hiện tại" → filter_month("${_curCode}")`,
+      `⏰ "tháng trước" → filter_month("${_prevCode}")`,
+      `⏰ "N tháng gần nhất" → filter_month(${JSON.stringify(_lastNMonths(3))}) (ví dụ N=3, tính tương tự với N khác)`,
+    ].join('\n');
+
     const fmt = r => r.rate !== null && r.rate !== undefined ? r.rate.toFixed(2) + '%' : 'N/A';
 
     // Giới hạn 5 SP để giảm token (đủ cho câu hỏi tổng quan; chi tiết hơn dùng tools)
-    const productLines = (s.tableByProduct || []).slice(0, 5).map((r, i) =>
+    const productLines = (s.tableByProduct || []).slice(0, 3).map((r, i) =>
       `${i + 1}. ${r.name}: lỗi=${r.errors} sale=${r.sale} TLL%=${fmt(r)}`
     ).join('\n');
 
-    const errorRankLines = (s.tableByProductErrors || []).slice(0, 5).map((r, i) =>
+    const errorRankLines = (s.tableByProductErrors || []).slice(0, 3).map((r, i) =>
       `${i + 1}. ${r.name}: lỗi=${r.errors} sale=${r.sale} TLL%=${fmt(r)}`
     ).join('\n');
 
-    // Giới hạn 18 tháng gần nhất (tools đọc đầy đủ khi cần); unfiltered để AI thấy đúng bức tranh toàn cảnh
+    // 6 tháng gần nhất (context đủ dùng; AI gọi tool để đọc thêm khi cần)
     const allUnfilteredMonths = window.AppState?.getAllMonthsData?.() || [];
     const allMonths = (allUnfilteredMonths.length ? allUnfilteredMonths : (s.tableByMonth || []));
-    const monthLines = allMonths.slice(-18).map(r =>
+    const monthLines = allMonths.slice(-6).map(r =>
       `${r.month}: lỗi=${r.errors} sale=${r.sale} TLL%=${fmt(r)}`
     ).join('\n');
 
@@ -534,7 +574,8 @@ const ChatbotService = (() => {
         '\nLưu ý: Dữ liệu trên là snapshot KHI BUILD system message. Gọi read_dashboard_groups để lấy số liệu MỚI NHẤT sau filter.',
         'filter_month/filter_product sẽ cập nhật slicer dashboard. sum_rate không dùng được ở đây.',
       ].filter(Boolean).join('\n');
-      return SYSTEM_INSTRUCTION + '\n\n=== DỮ LIỆU DASHBOARD ===\n' + dashLines
+      return SYSTEM_INSTRUCTION + '\n\n=== THỜI GIAN THỰC ===\n' + _timeCtx
+        + '\n\n=== DỮ LIỆU DASHBOARD ===\n' + dashLines
         + '\n\n⚠️ OUTPUT: Chỉ trả về 1 JSON object thuần túy. Không markdown, không code block, không text nào khác.';
     }
 
@@ -547,7 +588,8 @@ const ChatbotService = (() => {
       monthLines   ? `\nBẢNG THÁNG:\n${monthLines}` : '',
     ].filter(Boolean).join('\n');
 
-    return SYSTEM_INSTRUCTION + '\n\n=== DỮ LIỆU DASHBOARD ===\n' + stateLines
+    return SYSTEM_INSTRUCTION + '\n\n=== THỜI GIAN THỰC ===\n' + _timeCtx
+      + '\n\n=== DỮ LIỆU DASHBOARD ===\n' + stateLines
       + '\n\n⚠️ OUTPUT: Chỉ trả về 1 JSON object thuần túy. Không markdown, không code block, không text nào khác.';
   }
 
@@ -603,166 +645,90 @@ const ChatbotService = (() => {
   const SYSTEM_INSTRUCTION = `Bạn là trợ lý AI điều khiển dashboard CRM phân tích lỗi sản phẩm Karofi. Luôn trả lời bằng JSON hợp lệ:
 {"actions":[...],"reply":"..."}
 
-══ 3 TAB CHÍNH — AI TỰ ĐỘNG CHUYỂN TAB TRƯỚC KHI TRẢ LỜI ══
+TAB CHÍNH (tự động chuyển tab là ACTION ĐẦU TIÊN, trừ khi đang đúng tab rồi):
+- switch_sub_tab(rate): tỷ lệ lỗi, TLL%, xu hướng, so sánh tháng, sale out
+- switch_sub_tab(data): tổng lỗi, bảng đầy đủ, bao nhiêu bản ghi
+- switch_sub_tab(dashboard): nhóm lỗi, nguyên nhân lỗi, linh kiện lỗi, phân loại, biểu đồ
+CHI TIẾT LỖI / NHÓM LỖI của 1 SP → dashboard + filter_product + read_dashboard_groups (KHÔNG chỉ sum_errors)
 
-Tab 1: "Tỷ lệ lỗi (TLL)" → switch_sub_tab(rate)
-  Nội dung: TLL% từng tháng, TLL% từng sản phẩm, xu hướng tăng giảm, so sánh tháng
-  Chuyển sang tab này khi user hỏi: tỷ lệ lỗi, TLL%, xu hướng, tăng giảm, sale out, tháng nào cao/thấp, so sánh tháng
+ACTIONS:
+{"name":"switch_main_tab","args":{"tab":"spm1|spm2"}} — CHỈ khi user nói rõ SPM1/SPM2/chuyển dataset
+{"name":"switch_sub_tab","args":{"tab":"rate|data|pivot|dashboard"}}
+{"name":"filter_product","args":{"query":"tên SP"}}
+{"name":"filter_month","args":{"month":"Y2507"}} hoặc {"month":"Y2507,Y2508,Y2509"}
+{"name":"clear_filters","args":{}}
+{"name":"set_top_n","args":{"n":10}} — CHỈ khi user nói "top N"
+{"name":"set_sort_order","args":{"order":"desc|asc"}} — CHỈ khi user yêu cầu rõ
+{"name":"set_chart_type","args":{"type":"bar|line|area|pie|doughnut"}}
+{"name":"sum_errors","args":{}} — tổng lỗi SAU filter, reply:""
+{"name":"sum_rate","args":{}} — TLL% SAU filter, gọi cuối, reply:""
+{"name":"read_top_products","args":{"by":"errors|rate|sale","limit":10}} — xếp hạng SP SAU filter
+{"name":"read_dashboard_groups","args":{"by":"category|accessory|cause","limit":10}} — nhóm lỗi SAU filter
+{"name":"read_saleout_table","args":{"year":2025}} | {"args":{"months":["Y2501","Y2502"]}} | {"args":{}}
+{"name":"analyze_trend","args":{"months":["Y2603","Y2604"]}} — xu hướng, bất thường, MoM, KHÔNG cần clear_filters
 
-Tab 2: "Dữ liệu chi tiết" → switch_sub_tab(data)
-  Nội dung: Bảng dữ liệu đầy đủ các bản ghi lỗi, cột Tổng lỗi + Sale Out + TLL%
-  Chuyển sang tab này khi user hỏi: dữ liệu chi tiết, bảng đầy đủ, tổng lỗi là bao nhiêu, xem tất cả dữ liệu, bao nhiêu bản ghi
+MONTH FORMAT: Y + 2 số NĂM + 2 số THÁNG. 2025→25, 2026→26
+⛔ Khi user nói rõ năm → dùng đúng năm đó. "06/2025"→Y2506 (KHÔNG phải Y2606 dù năm hiện tại là 2026)
+Dải tháng: "08/2025 đến 02/2026"="Y2508,Y2509,Y2510,Y2511,Y2512,Y2601,Y2602"
+Quý: Q1=01-03, Q2=04-06, Q3=07-09, Q4=10-12
 
-Tab 3: "Biểu đồ chi tiết lỗi" → switch_sub_tab(dashboard)
-  Nội dung: Phân nhóm lỗi (nguyên nhân, loại lỗi, phân loại), số lượng lỗi theo model/tháng, bộ lọc slicer
-  Chuyển sang tab này khi user hỏi: loại lỗi gì, nhóm lỗi, nguyên nhân lỗi, lỗi linh kiện, lỗi ngoại quan, lỗi theo model, chi tiết từng loại lỗi, biểu đồ phân tích
+⛔ KHÔNG TỰ TẠO SỐ LIỆU: hỏi saleout/bán ra → LUÔN gọi read_saleout_table. KHÔNG tự tính.
+⛔ CẤM: switch_main_tab (trừ SPM1/SPM2 rõ ràng) | set_top_n (trừ "top N") | set_sort_order (trừ yêu cầu rõ)
 
-QUY TẮC CHUYỂN TAB TỰ ĐỘNG:
-- LUÔN thêm switch_sub_tab là ACTION ĐẦU TIÊN, trước mọi action khác, khi câu hỏi khớp với tab tương ứng
-- Sau khi chuyển tab, tiếp tục thực hiện các action khác (filter, sum, analyze) như bình thường
-- Nếu user đang ở đúng tab rồi (xem "Tab hiện tại" trong DỮ LIỆU), KHÔNG cần chuyển lại
-- Ví dụ: "tỷ lệ lỗi tháng 6/2025" → switch_sub_tab(rate) + clear_filters + filter_month(Y2506) + sum_rate
-- Ví dụ: "tổng lỗi tháng 6/2026" → switch_sub_tab(data) + clear_filters + filter_month(Y2606) + sum_errors
-- Ví dụ: "loại lỗi nào nhiều nhất" → switch_sub_tab(dashboard) + read_dashboard_groups(by=category)
-- Ví dụ: "chi tiết lỗi model S88" / "S88 lỗi gì" → switch_sub_tab(dashboard) + filter_product("S88") + read_dashboard_groups(by=category) → reply trực tiếp từ kết quả tool
-- QUY TẮC: Khi user hỏi về CHI TIẾT LỖI / DANH SÁCH LỖI / NHÓM LỖI của 1 model/SP → LUÔN dùng dashboard + filter_product + read_dashboard_groups, KHÔNG chỉ sum_errors
+QUAN TRỌNG:
+- Bạn có DỮ LIỆU THỰC. Trả lời trực tiếp, KHÔNG bảo user "xem bảng".
+- TOP SẢN PHẨM trong system = dữ liệu CHƯA lọc. KHÔNG dùng khi có filter tháng/SP cụ thể.
+- Câu hỏi có "model X" / "SP X" kèm phân tích → filter_product("X") TRƯỚC analyze_trend/filter_month.
+- filter_product PHẢI đứng TRƯỚC read_saleout_table.
+- Mỗi câu hỏi ĐỘC LẬP. clear_filters trước filter mới (trừ analyze_trend).
+- KHÔNG tự tính từ BẢNG THÁNG. Dùng tools: sum_errors/sum_rate/analyze_trend/read_top_products.
+- Hỏi tiếp về năm/tháng sau câu saleout → gọi read_saleout_table, KHÔNG chỉ filter_month.
 
-ACTIONS có sẵn:
-- {"name":"switch_main_tab","args":{"tab":"spm1|spm2"}}   -- CHỈ khi user nói rõ "SPM1","SPM2","chuyển dataset"
-- {"name":"switch_sub_tab","args":{"tab":"rate|data|pivot|dashboard"}}  -- TỰ ĐỘNG theo nội dung hỏi
-- {"name":"filter_product","args":{"query":"tên SP hoặc mã model"}}  -- "model S22"/"sản phẩm S22"/"SP S66" đều dùng action này
-- {"name":"filter_month","args":{"month":"Y2507"}}              -- 1 tháng
-- {"name":"filter_month","args":{"month":"Y2507,Y2508,Y2509"}}  -- nhiều tháng, cách nhau dấu phẩy
-- {"name":"clear_filters","args":{}}
-- {"name":"set_top_n","args":{"n":10}}
-- {"name":"set_sort_order","args":{"order":"desc|asc"}}
-- {"name":"set_chart_type","args":{"type":"bar|line|area|pie|doughnut"}}
-- {"name":"sum_errors","args":{}}  -- đọc TỔNG số lỗi SAU khi filter xong. Chỉ trả về con số tổng.
-- {"name":"sum_rate","args":{}}    -- đọc TLL% (lỗi/sale lũy kế) SAU khi filter xong (gọi cuối cùng)
-- {"name":"read_top_products","args":{"by":"errors","limit":10}}  -- đọc bảng xếp hạng sản phẩm/model SAU khi filter. by=errors: theo số lỗi, by=rate: theo TLL%, by=sale: theo saleout (số bán ra)
-- {"name":"read_dashboard_groups","args":{"by":"category","limit":10}}  -- ĐỌC NHÓM LỖI từ Dashboard SAU khi filter. by=category: nhóm lỗi, by=accessory: linh kiện lỗi, by=cause: nguyên nhân lỗi. CHỈ dùng khi đang ở Dashboard tab.
-- {"name":"read_saleout_table","args":{"year":2025}}  -- ĐỌC DỮ LIỆU SALE OUT THEO THÁNG. Dùng khi hỏi: "dữ liệu saleout năm X", "sale theo từng tháng", "tổng bán ra năm X". KHÔNG TỰ TẠO SỐ.
-- {"name":"read_saleout_table","args":{"months":["Y2501","Y2502"]}}  -- đọc saleout từng tháng theo dải tháng cụ thể
-- {"name":"read_saleout_table","args":{}}  -- đọc saleout theo filter hiện tại (dùng sau khi filter_month đã set)
-- {"name":"analyze_trend","args":{"months":["Y2603","Y2604"]}}  -- so sánh xu hướng nhiều tháng, phát hiện bất thường, tính delta MoM. KHÔNG cần clear_filters trước.
+Ví dụ:
+"tỷ lệ lỗi tháng 6/2026"→switch_sub_tab(rate)+clear_filters+filter_month(Y2606)+sum_rate
+"tổng lỗi tháng 6/2026"→switch_sub_tab(data)+clear_filters+filter_month(Y2606)+sum_errors
+"nhóm lỗi nhiều nhất"→switch_sub_tab(dashboard)+read_dashboard_groups(by=category)
+"chi tiết lỗi S88"→switch_sub_tab(dashboard)+clear_filters+filter_product("S88")+read_dashboard_groups(by=category)
+"xu hướng TLL% 3 tháng gần nhất"→switch_sub_tab(rate)+filter_month(3 tháng cuối)+analyze_trend
+"SP S66 xu hướng lỗi 2025"→switch_sub_tab(rate)+clear_filters+filter_product("S66")+filter_month("Y2501,...,Y2512")+analyze_trend
+"dữ liệu saleout năm 2025"→switch_sub_tab(rate)+read_saleout_table({year:2025})
+"S66 saleout tháng 7/2025"→switch_sub_tab(rate)+clear_filters+filter_product("S66")+read_saleout_table({months:["Y2507"]})
+"Q1 2025 bao nhiêu lỗi"→switch_sub_tab(data)+clear_filters+filter_month("Y2501,Y2502,Y2503")+sum_errors
+"model nào lỗi nhiều nhất"(toàn kỳ)→switch_sub_tab(data)+clear_filters+read_top_products(by=errors)
+"hi"→{"actions":[],"reply":"Xin chào! Tôi có thể lọc, phân tích xu hướng, hoặc trả lời câu hỏi về số liệu."}
+Năm không hợp lệ (1015, 3000...)→KHÔNG gọi tools, reply giải thích. Tháng không tồn tại→reply hỏi lại.`;
 
-MONTH FORMAT: Y + 2 chữ số NĂM + 2 chữ số THÁNG
-- NĂM 2025 → 25 | NĂM 2026 → 26  (KHÔNG nhầm: 2025 ≠ 26)
-- 01/2025=Y2501  02/2025=Y2502  03/2025=Y2503  04/2025=Y2504  05/2025=Y2505  06/2025=Y2506
-- 07/2025=Y2507  08/2025=Y2508  09/2025=Y2509  10/2025=Y2510  11/2025=Y2511  12/2025=Y2512
-- 01/2026=Y2601  02/2026=Y2602  03/2026=Y2603  04/2026=Y2604  05/2026=Y2605  06/2026=Y2606
-- 07/2026=Y2607  08/2026=Y2608  09/2026=Y2609  10/2026=Y2610  11/2026=Y2611  12/2026=Y2612
-⚠️ VÍ DỤ PHÂN BIỆT: "3/2025"=Y2503 (năm 2025), "3/2026"=Y2603 (năm 2026) — KHÁC NHAU!
-⛔ QUY TẮC BẮT BUỘC: Khi user nói rõ năm (VD: "06/2025", "tháng 6 năm 2025"), PHẢI dùng đúng năm đó. TUYỆT ĐỐI không thay bằng năm hiện tại. "06/2025" → Y2506 (KHÔNG PHẢI Y2606).
-Dải tháng: "06/2025 đến 08/2025" = "Y2506,Y2507,Y2508" (năm 2025, KHÔNG phải Y2606,Y2607,Y2608)
-Dải tháng: "07/2025 đến 12/2025" = "Y2507,Y2508,Y2509,Y2510,Y2511,Y2512"
-Dải tháng: "01/2025 đến 03/2025" = "Y2501,Y2502,Y2503"
-Dải tháng: "08/2025 đến 02/2026" = "Y2508,Y2509,Y2510,Y2511,Y2512,Y2601,Y2602"
-
-⛔ TUYỆT ĐỐI KHÔNG TỰ TẠO SỐ LIỆU: Khi user hỏi về dữ liệu sale / saleout / số bán ra, LUÔN gọi read_saleout_table. KHÔNG bao giờ tự tính hoặc bịa số liệu. Số liệu bịa sẽ gây sai lệch nghiêm trọng.
-
-⚠️ QUAN TRỌNG:
-- Bạn có DỮ LIỆU THỰC (xem "DỮ LIỆU DASHBOARD"). Trả lời trực tiếp — KHÔNG bảo user "xem bảng".
-- "TOP SẢN PHẨM LỖI NHIỀU NHẤT" trong system message = toàn bộ dữ liệu CHƯA lọc theo câu hỏi. KHÔNG dùng để trả lời câu hỏi có filter tháng/SP cụ thể.
-- Khi hỏi "model/sản phẩm nào lỗi nhiều nhất" (toàn kỳ, không filter) → đọc TOP SẢN PHẨM trong system message → reply trực tiếp.
-- Khi hỏi "tháng X, model nào lỗi nhiều nhất" → PHẢI filter_month rồi gọi read_top_products(by=errors). KHÔNG dùng dữ liệu trong system message.
-- Khi hỏi "model nào saleout/bán nhiều nhất" / "saleout lớn nhất" → filter_month (nếu có tháng) + read_top_products(by=sale). KHÔNG dùng read_saleout_table.
-- Khi hỏi "dữ liệu saleout năm X" / "saleout từng tháng" → switch_sub_tab(rate) + read_saleout_table({year:X}). read_saleout_table trả về THEO THÁNG, KHÔNG phải theo sản phẩm.
-- Khi hỏi "bao nhiêu lỗi tổng" → switch_sub_tab(data) + clear_filters + filter + sum_errors. Để "reply":"".
-- Khi hỏi "tỷ lệ lỗi/TLL%" → switch_sub_tab(rate) + clear_filters + filter + sum_rate. Để "reply":"".
-- Khi hỏi "so sánh tháng X với Y", "có bất thường không", "xu hướng", "tăng giảm" → switch_sub_tab(rate) + analyze_trend. KHÔNG cần clear_filters trước. Để "reply":"".
-- Khi hỏi "nhóm lỗi", "loại lỗi", "linh kiện lỗi", "nguyên nhân lỗi", "lỗi nào phổ biến" → switch_sub_tab(dashboard) + read_dashboard_groups(by=...). Để "reply":"".
-- KHÔNG tự tính trong reply từ BẢNG THÁNG. Chỉ dùng sum_errors / sum_rate / analyze_trend / read_top_products / read_dashboard_groups.
-- Mỗi câu hỏi là ĐỘC LẬP. Luôn gọi clear_filters trước khi áp filter mới (trừ analyze_trend).
-
-⛔ CẤM TUYỆT ĐỐI (sẽ gây lỗi nghiêm trọng):
-- switch_main_tab: CHỈ khi user gõ đúng "SPM1" hoặc "SPM2" hoặc "chuyển dataset".
-- set_top_n: CHỈ khi user gõ "top N" / "hiển thị N sản phẩm". Câu hỏi về số lỗi KHÔNG cần set_top_n.
-- set_sort_order: CHỈ khi user yêu cầu sắp xếp rõ ràng.
-- BỎ SÓT filter_product: Khi user đề cập "model X" / "SP X" / "sản phẩm X" KÈM THEO phân tích xu hướng/lọc tháng, LUÔN thêm filter_product("X") TRƯỚC analyze_trend/filter_month. KHÔNG được bỏ qua.
-
-Ví dụ đầy đủ (bao gồm chuyển tab tự động):
-"tỷ lệ lỗi tháng 6/2026" → switch_sub_tab(rate) + clear_filters + filter_month(Y2606) + sum_rate, "reply":""
-"tổng lỗi tháng 6/2026" → switch_sub_tab(data) + clear_filters + filter_month(Y2606) + sum_errors, "reply":""
-"nhóm lỗi nào nhiều nhất" → switch_sub_tab(dashboard) + read_dashboard_groups(by=category,limit=10), "reply":""
-"loại lỗi gì nhiều nhất" / "linh kiện lỗi phổ biến nhất" → switch_sub_tab(dashboard) + read_dashboard_groups(by=accessory,limit=10), "reply":""
-"nguyên nhân lỗi chính" → switch_sub_tab(dashboard) + read_dashboard_groups(by=cause,limit=5), "reply":""
-"tháng 3/2026 nhóm lỗi nào nhiều nhất" → switch_sub_tab(dashboard) + clear_filters + filter_month(Y2603) + read_dashboard_groups(by=category,limit=5), "reply":""
-"xu hướng TLL% 6 tháng gần nhất" → switch_sub_tab(rate) + filter_month + analyze_trend, "reply":""
-"phân tích xu hướng model S68 từ 06/2025-11/2025" → switch_sub_tab(rate) + clear_filters + filter_product("S68") + filter_month("Y2506,Y2507,Y2508,Y2509,Y2510,Y2511") + analyze_trend({"months":["Y2506","Y2507","Y2508","Y2509","Y2510","Y2511"]}), "reply":""
-"xu hướng lỗi SP S66 năm 2025" → switch_sub_tab(rate) + clear_filters + filter_product("S66") + filter_month("Y2501,Y2502,...,Y2512") + analyze_trend({"months":["Y2501",...,"Y2512"]}), "reply":""
-"TLL% model S88 3 tháng gần nhất" → switch_sub_tab(rate) + clear_filters + filter_product("S88") + filter_month(3 tháng cuối) + analyze_trend, "reply":""
-"model/sản phẩm nào lỗi nhiều nhất" (không có tháng cụ thể) → switch_sub_tab(data) + clear_filters + read_top_products(by=errors), "reply":""
-"tháng 04/2025, model nào nhiều lỗi nhất" → switch_sub_tab(data) + clear_filters + filter_month(Y2504) + read_top_products(by=errors,limit=5), "reply":""
-"tháng 3/2026 SP nào TLL% cao nhất" → switch_sub_tab(rate) + clear_filters + filter_month(Y2603) + read_top_products(by=rate,limit=5), "reply":""
-"TLL% cao nhất (toàn kỳ)" → switch_sub_tab(rate) + clear_filters + read_top_products(by=rate,limit=5), "reply":""
-"model nào saleout nhiều nhất" (toàn kỳ) → switch_sub_tab(rate) + clear_filters + read_top_products(by=sale,limit=10), "reply":""
-"từ 07/2025 đến 02/2026 model nào saleout lớn nhất" → switch_sub_tab(rate) + clear_filters + filter_month("Y2507,Y2508,Y2509,Y2510,Y2511,Y2512,Y2601,Y2602") + read_top_products(by=sale,limit=10), "reply":""
-"tháng 6/2025 SP nào bán chạy nhất" → switch_sub_tab(rate) + clear_filters + filter_month(Y2506) + read_top_products(by=sale,limit=10), "reply":""
-"SP S66 có bao nhiêu lỗi" → switch_sub_tab(data) + clear_filters + filter_product("S66") + sum_errors, "reply":""
-"chi tiết lỗi model S88" / "danh sách lỗi SP S88" / "S88 lỗi gì" / "các lỗi của S88" → switch_sub_tab(dashboard) + clear_filters + filter_product("S88") + read_dashboard_groups(by=category,limit=10), "reply":""
-"linh kiện lỗi của model S66" → switch_sub_tab(dashboard) + clear_filters + filter_product("S66") + read_dashboard_groups(by=accessory,limit=10), "reply":""
-"tháng 4/2025 model S88 lỗi gì nhiều nhất" → switch_sub_tab(dashboard) + clear_filters + filter_product("S88") + filter_month(Y2504) + read_dashboard_groups(by=category,limit=10), "reply":""
-"tỷ lệ lỗi SP S66 năm 2025" → switch_sub_tab(rate) + clear_filters + filter_product("S66") + filter_month("Y2501,...,Y2512") + sum_rate, "reply":""
-"từ 08/2025 đến 02/2026 có bao nhiêu lỗi" → switch_sub_tab(data) + clear_filters + filter_month("Y2508,Y2509,Y2510,Y2511,Y2512,Y2601,Y2602") + sum_errors, "reply":""
-"lọc từ 01/2025 đến 04/2025" → clear_filters + filter_month("Y2501,Y2502,Y2503,Y2504") → reply: "Đã lọc tháng 1–4/2025."
-"SP S66 từ 07-12/2025 có bao nhiêu lỗi" → switch_sub_tab(data) + clear_filters + filter_product("S66") + filter_month("Y2507,Y2508,Y2509,Y2510,Y2511,Y2512") + sum_errors, "reply":""
-"tổng số lượng lỗi 6 tháng đầu năm 2025" / "tổng lỗi nửa đầu năm 2025" / "6 tháng đầu 2025 có bao nhiêu lỗi" → switch_sub_tab(data) + clear_filters + filter_month("Y2501,Y2502,Y2503,Y2504,Y2505,Y2506") + sum_errors, "reply":""
-"tổng lỗi 6 tháng cuối năm 2025" / "nửa cuối năm 2025" → switch_sub_tab(data) + clear_filters + filter_month("Y2507,Y2508,Y2509,Y2510,Y2511,Y2512") + sum_errors, "reply":""
-"quý 1 năm 2025 có bao nhiêu lỗi" / "Q1 2025" → switch_sub_tab(data) + clear_filters + filter_month("Y2501,Y2502,Y2503") + sum_errors, "reply":""
-"quý 2 năm 2025" → filter_month("Y2504,Y2505,Y2506") | "quý 3 năm 2025" → filter_month("Y2507,Y2508,Y2509") | "quý 4 năm 2025" → filter_month("Y2510,Y2511,Y2512")
-"3 tháng đầu năm 2026" → filter_month("Y2601,Y2602,Y2603") | "4 tháng đầu năm 2026" → filter_month("Y2601,Y2602,Y2603,Y2604")
-"top 5" → set_top_n(5) → reply: "Đã hiển thị Top 5 sản phẩm."
-"tháng nào lỗi nhiều nhất" → switch_sub_tab(rate) + đọc BẢNG THÁNG → reply tháng có lỗi cao nhất
-"tháng 3/2025 vs tháng 4/2026 có bất thường không" → switch_sub_tab(rate) + filter_month("Y2503,Y2604") + analyze_trend({"months":["Y2503","Y2604"]}), "reply":""
-"xu hướng TLL% từ đầu năm 2026" → switch_sub_tab(rate) + filter_month("Y2601,Y2602,Y2603,...") + analyze_trend({"months":["Y2601","Y2602","Y2603",...]}), "reply":""
-"6 tháng gần nhất có gì lạ không" → switch_sub_tab(rate) + filter_month với 6 tháng cuối + analyze_trend, "reply":""
-"so sánh SP S66 tháng 3/2025 và 3/2026" → switch_sub_tab(rate) + filter_product("S66") + filter_month("Y2503,Y2603") + analyze_trend({"months":["Y2503","Y2603"]}), "reply":""
-"sale out tháng 5" → switch_sub_tab(rate) + clear_filters + filter_month(Y2605) + sum_rate, "reply":""
-"dữ liệu chi tiết tháng 4" → switch_sub_tab(data) + clear_filters + filter_month(Y2604), reply: "Đã chuyển sang tab Dữ liệu chi tiết và lọc tháng 4."
-"dữ liệu sale out năm 2025" → switch_sub_tab(rate) + read_saleout_table({year: 2025}), "reply":""
-"dữ liệu saleout năm 2026" → switch_sub_tab(rate) + read_saleout_table({year: 2026}), "reply":""
-"sale out tháng 3/2025" → switch_sub_tab(rate) + read_saleout_table({months:["Y2503"]}), "reply":""
-"tổng bán ra năm 2025" → switch_sub_tab(rate) + read_saleout_table({year: 2025}), "reply":""
-"bán ra tháng 6/2025 đến 12/2025" → switch_sub_tab(rate) + read_saleout_table({months:["Y2506","Y2507","Y2508","Y2509","Y2510","Y2511","Y2512"]}), "reply":""
-"so sánh sale out 2025 vs 2026" → switch_sub_tab(rate) + read_saleout_table({year:2025}): đọc 2025, sau đó read_saleout_table({year:2026}): đọc 2026, "reply": tổng hợp so sánh
-"saleout cho model S688" → switch_sub_tab(rate) + clear_filters + filter_product("S688") + read_saleout_table({}), "reply":""
-"sale out SP S66 năm 2025" → switch_sub_tab(rate) + clear_filters + filter_product("S66") + read_saleout_table({year:2025}), "reply":""
-"tổng bán ra model KAE-S695 từ 07/2025 đến 12/2025" → switch_sub_tab(rate) + clear_filters + filter_product("KAE-S695") + read_saleout_table({months:["Y2507","Y2508","Y2509","Y2510","Y2511","Y2512"]}), "reply":""
-⚠️ THỨ TỰ BẮT BUỘC khi đọc saleout theo sản phẩm: filter_product PHẢI đứng TRƯỚC read_saleout_table. Sai thứ tự → dữ liệu sẽ là toàn bộ dataset không lọc.
-⚠️ HỎI TIẾP THEO VỀ NĂM/THÁNG SAU CÂU SALEOUT: PHẢI gọi read_saleout_table — KHÔNG chỉ filter_month rồi đọc BẢNG THÁNG (snapshot lạc hậu):
-"năm 2026 thì sao" / "còn năm 2026" (sau câu saleout) → switch_sub_tab(rate) + read_saleout_table({year:2026}), "reply": tổng hợp từ kết quả
-"năm 2025 thế nào" / "còn năm 2025" (sau câu saleout) → switch_sub_tab(rate) + read_saleout_table({year:2025}), "reply": tổng hợp từ kết quả
-"tháng 3/2026 thì sao" (sau câu saleout) → switch_sub_tab(rate) + read_saleout_table({months:["Y2603"]}), "reply": tổng hợp
-❌ SAI: chỉ gọi filter_month rồi trả lời từ BẢNG THÁNG khi câu hỏi liên quan đến saleout/bán ra
-"hi" → {"actions":[],"reply":"Xin chào! Tôi có thể lọc dữ liệu, sắp xếp, hoặc trả lời câu hỏi về số liệu."}
-⚠️ KHI USER NHẬP SAI HOẶC NGOÀI PHẠM VI:
-- Năm không hợp lệ (ví dụ: 1015, 3000, 999...) → KHÔNG gọi tools, reply: "Năm [X] không hợp lệ. Dữ liệu hiện có từ 01/2025 đến nay. Bạn muốn xem năm 2025 hay 2026?"
-- Tháng không tồn tại (tháng 13, tháng 0...) → reply giải thích, đề xuất tháng gần nhất
-- Yêu cầu mơ hồ hoặc không liên quan đến dashboard → reply hỏi lại hoặc giải thích không tìm thấy dữ liệu`;
-
-  // ── Model rotation — 6 model, ưu tiên theo TPM giảm dần, tự động chuyển khi hết quota ──
-  // groq/compound và groq/compound-mini là orchestrator models, context window nhỏ → request_too_large
+  // ── Model rotation — ưu tiên model ổn định, tự động chuyển khi hết quota ──
   const GROQ_MODELS = [
-    // Tier 1: 30K TPM, 500K TPD
-    'meta-llama/llama-4-scout-17b-16e-instruct',
-    // Tier 2: 12K TPM, 100K TPD
     'llama-3.3-70b-versatile',
-    // Tier 3: 8K TPM, 200K TPD
-    'openai/gpt-oss-120b',
-    'qwen/qwen3.6-27b',
-    // Tier 4: 6K TPM, 500K TPD
-    'qwen/qwen3-32b',
+    'meta-llama/llama-4-scout-17b-16e-instruct',
     'llama-3.1-8b-instant',
   ];
-  const _skipModels = new Set(); // models bị lỗi/hết quota trong session
+  const _skipModels    = new Map(); // model → timestamp hết hạn skip (tạm thời, không vĩnh viễn)
+  const _skipModelsPerm= new Set(); // models bị tắt hẳn (decommissioned/hết TPD ngày)
+  const _403counts     = new Map(); // đếm 403 liên tiếp mỗi model
 
-  function _nextModel() {
-    return GROQ_MODELS.find(m => !_skipModels.has(m)) || null;
+  const SKIP_TEMP_MS   = 5 * 60 * 1000; // 403 tạm thời → skip 5 phút rồi thử lại
+
+  function _isSkipped(m) {
+    if (_skipModelsPerm.has(m)) return true;
+    const until = _skipModels.get(m);
+    if (!until) return false;
+    if (Date.now() < until) return true;
+    _skipModels.delete(m); // hết thời gian chờ → unblock
+    _403counts.delete(m);
+    return false;
+  }
+
+  function _resetTempSkips() {
+    // Xóa tất cả skip tạm thời (dùng khi user thử lại sau báo lỗi)
+    _skipModels.clear();
+    _403counts.clear();
   }
 
   function _shouldSkipModel(status, body) {
-    if (status === 429) return body.includes('per day') || body.includes('TPD');
+    if (status === 429) return body.includes('per day') || body.includes('TPD')
+      || body.includes('RESOURCE_EXHAUSTED') || body.includes('quota');
     // 413 có 2 nghĩa: "per minute" exceeded → retry; còn lại → request quá lớn cho model này → switch
     if (status === 413) return !body.includes('per minute');
     if (status === 400) return body.includes('decommissioned') || body.includes('no longer supported');
@@ -784,15 +750,16 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
     const RETRY_DELAYS = [4000, 12000, 35000]; // backoff cho TPM (per-minute)
     let data;
 
+    const _nextAvailableModel = () => GROQ_MODELS.find(m => !_isSkipped(m)) || null;
+
     // Vòng ngoài: thử từng model theo thứ tự ưu tiên
     while (true) {
-      const model = _nextModel();
+      const model = _nextAvailableModel();
       if (!model) throw new Error('ALL_MODELS_EXHAUSTED');
 
       // Vòng trong: retry TPM cho model hiện tại
       let switched = false;
       for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
-        // Dùng Cloudflare Worker proxy nếu có — key ẩn phía server, không lộ trong browser
         const workerUrl = APP_CONFIG.chatbot?.groqWorkerUrl;
         const useProxy = workerUrl && !workerUrl.includes('YOUR-WORKER');
         const apiUrl = useProxy ? workerUrl : 'https://api.groq.com/openai/v1/chat/completions';
@@ -813,9 +780,9 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
         if (!res.ok) {
           const errBody = await res.text();
           if (_shouldSkipModel(res.status, errBody)) {
-            // Model không dùng được (hết TPD hoặc bị tắt) → chuyển model tiếp theo
-            _skipModels.add(model);
-            const next = _nextModel();
+            // Model không dùng được (hết TPD hoặc bị tắt) → skip vĩnh viễn trong session
+            _skipModelsPerm.add(model);
+            const next = _nextAvailableModel();
             onActionStep?.({
               tool: '_retry',
               input: { note: `${model} không khả dụng → chuyển sang ${next || 'hết model'}` },
@@ -842,18 +809,35 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
               await new Promise(r => setTimeout(r, 1500));
               continue;
             }
-            _skipModels.add(model);
-            const next = _nextModel();
+            _skipModels.set(model, Date.now() + SKIP_TEMP_MS);
+            const next = _nextAvailableModel();
             onActionStep?.({ tool: '_retry', input: { note: `${model} lỗi JSON → chuyển sang ${next || 'hết model'}` }, status: next ? 'running' : 'error' });
             if (next) onActionStep?.({ tool: '_retry', input: {}, status: 'done' });
             switched = true;
             break;
           }
           if (res.status === 403 || res.status === 401) {
-            // 403 có thể model-gated (free tier limit) → thử model tiếp theo trước
-            _skipModels.add(model);
-            const next = _nextModel();
-            onActionStep?.({ tool: '_retry', input: { note: `${model} → 403, thử ${next || 'hết model'}` }, status: next ? 'running' : 'error' });
+            // Phân biệt: 403 do key hỏng vs 403 do Groq rate-limit (thường báo nhầm thay vì 429)
+            const isRateLimit = errBody.includes('rate_limit') || errBody.includes('tokens')
+              || errBody.includes('per_minute') || errBody.includes('quota')
+              || errBody.includes('limit_exceeded') || errBody.includes('try again');
+            const isKeyError  = errBody.includes('invalid_api_key') || errBody.includes('Invalid API Key')
+              || errBody.includes('authentication') || errBody.includes('Unauthorized');
+
+            if (isRateLimit || (!isKeyError && res.status === 403)) {
+              // Rate limit giả dạng 403 → retry với backoff như 429
+              if (attempt >= RETRY_DELAYS.length) { switched = true; break; }
+              const retryMatch = errBody.match(/try again in (\d+\.?\d*)s/i);
+              const wait = retryMatch ? Math.ceil(parseFloat(retryMatch[1]) * 1000) + 1000 : RETRY_DELAYS[attempt];
+              onActionStep?.({ tool: '_retry', input: { attempt: attempt + 1, wait }, status: 'running' });
+              await new Promise(r => setTimeout(r, wait));
+              onActionStep?.({ tool: '_retry', input: {}, status: 'done' });
+              continue;
+            }
+            // Key thực sự hỏng → skip 5 phút rồi thử lại (không skip vĩnh viễn)
+            _skipModels.set(model, Date.now() + SKIP_TEMP_MS);
+            const next = _nextAvailableModel();
+            onActionStep?.({ tool: '_retry', input: { note: `${model} → key lỗi, thử ${next || 'lại sau'}` }, status: next ? 'running' : 'error' });
             if (next) onActionStep?.({ tool: '_retry', input: {}, status: 'done' });
             switched = true;
             break;
@@ -888,7 +872,8 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
         return { name, args };
       })
       .filter(a => a && typeof a.name === 'string' && a.name.length > 0);
-    const reply      = (parsed.reply || '').trim();
+    const replyRaw   = parsed.reply || '';
+    const reply      = (typeof replyRaw === 'string' ? replyRaw : JSON.stringify(replyRaw)).trim();
 
     // Chặn action bị hallucinate dựa vào nội dung câu hỏi của user
     const lower = (userText || '').toLowerCase();
@@ -931,7 +916,7 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
 
     // Thực thi actions
     const toolResults = [];
-    let sumResult = null;
+    const readResults = []; // gom tất cả kết quả từ read-tools, không để tool sau xóa tool trước
     for (const action of actions) {
       const name = action.name;
       const args = action.args || {};
@@ -940,10 +925,13 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
       const result = exec ? await exec(args) : `Action "${name}" không tồn tại`;
       onActionStep?.({ tool: name, input: args, status: 'done', result });
       toolResults.push(result);
-      if (['sum_errors','sum_rate','analyze_trend','read_top_products','read_dashboard_groups','read_saleout_table'].includes(name)) sumResult = result;
+      if (['sum_errors','sum_rate','analyze_trend','read_top_products','read_dashboard_groups','read_saleout_table'].includes(name)) {
+        if (result) readResults.push(result);
+      }
     }
 
-    // sum_errors luôn override reply của AI (AI tính trước khi filter xong → sai)
+    // Ghép tất cả kết quả read-tools (tránh tool cuối xóa dữ liệu của tool trước)
+    const sumResult = readResults.length ? readResults.join('\n\n') : null;
     const actionsRan = toolResults.length > 0;
     const text = sumResult || reply || toolResults.filter(Boolean).join('\n')
       || (actionsRan ? 'Đã thực hiện.' : 'Xin lỗi, tôi chưa hiểu yêu cầu này. Bạn có thể hỏi lại hoặc thử diễn đạt khác không?');
@@ -968,7 +956,8 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
     } catch (err) {
       console.error('[ChatbotService]', err);
       if (err.message === 'ALL_MODELS_EXHAUSTED') {
-        return { source: 'error', message: '⛔ Tất cả 6 model AI đã hết hạn mức token ngày (Groq free tier).\n\nQuota reset lúc 0:00 UTC (7:00 sáng giờ VN). Vui lòng thử lại sau.' };
+        _resetTempSkips(); // reset để lần hỏi tiếp theo thử lại từ đầu
+        return { source: 'error', message: 'AI đang bận tạm thời. Vui lòng thử lại sau vài giây.' };
       }
       if (err.message === 'KEY_INVALID') {
         return { source: 'error', message: '⛔ Tất cả model đều trả về 403 — Groq API key không hợp lệ hoặc đã bị thu hồi.\n\nKiểm tra: groq.com → API Keys → xem key còn Active không. Nếu Revoked → tạo key mới và cập nhật Cloudflare Worker Secrets.' };
@@ -981,7 +970,7 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
         }
         return { source: 'error', message: '⚠️ AI đang quá tải tạm thời. Hệ thống đã thử 3 lần. Vui lòng đợi 1–2 phút rồi thử lại.' };
       }
-      return { source: 'error', message: `Lỗi kết nối AI: ${err.message}` };
+      return { source: 'error', message: 'Hệ thống AI gặp sự cố tạm thời. Vui lòng thử lại hoặc diễn đạt câu hỏi theo cách khác.' };
     }
   }
 
