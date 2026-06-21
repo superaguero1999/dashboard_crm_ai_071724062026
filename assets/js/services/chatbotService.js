@@ -850,7 +850,13 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
             break;
           }
           if (res.status === 403 || res.status === 401) {
-            throw new Error('KEY_INVALID');
+            // 403 có thể model-gated (free tier limit) → thử model tiếp theo trước
+            _skipModels.add(model);
+            const next = _nextModel();
+            onActionStep?.({ tool: '_retry', input: { note: `${model} → 403, thử ${next || 'hết model'}` }, status: next ? 'running' : 'error' });
+            if (next) onActionStep?.({ tool: '_retry', input: {}, status: 'done' });
+            switched = true;
+            break;
           }
           throw new Error(`Groq API ${res.status}: ${errBody.slice(0, 160)}`);
         }
@@ -965,7 +971,7 @@ Ví dụ đầy đủ (bao gồm chuyển tab tự động):
         return { source: 'error', message: '⛔ Tất cả 6 model AI đã hết hạn mức token ngày (Groq free tier).\n\nQuota reset lúc 0:00 UTC (7:00 sáng giờ VN). Vui lòng thử lại sau.' };
       }
       if (err.message === 'KEY_INVALID') {
-        return { source: 'error', message: '⛔ Groq API key không hợp lệ hoặc đã bị thu hồi.\n\nCách fix: Cloudflare Worker → Settings → xóa tất cả biến GROQ_API_KEY cũ → thêm lại key mới dưới dạng Secret → Deploy.' };
+        return { source: 'error', message: '⛔ Tất cả model đều trả về 403 — Groq API key không hợp lệ hoặc đã bị thu hồi.\n\nKiểm tra: groq.com → API Keys → xem key còn Active không. Nếu Revoked → tạo key mới và cập nhật Cloudflare Worker Secrets.' };
       }
       if (err.message.includes('429')) {
         const retryMatch = err.message.match(/try again in (\d+)m/i);
