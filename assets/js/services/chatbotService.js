@@ -6,6 +6,10 @@ const ChatbotService = (() => {
   let _disambiguateCallback   = null; // callback để UI hiện disambiguation popup khi có nhiều match
   let _groqKeyDirect = null;          // key load từ NocoDB, dùng để gọi Groq trực tiếp từ browser
 
+  // Track filter state trong chatbot — phòng trường hợp SaleOutRenderer bị reset async
+  let _chatbotMonths   = [];  // months đã set bởi filter_month trong turn hiện tại
+  let _chatbotProducts = [];  // products đã set bởi filter_product
+
   // Load Groq key từ NocoDB config table (chạy 1 lần khi app khởi động)
   async function loadKey() {
     try {
@@ -179,18 +183,36 @@ const ChatbotService = (() => {
   }
 
   async function _execFilterMonth({ month }) {
-    // AI có thể trả về nhiều format: "Y2507", "07/2026", "07-2026", "07.2026", hoặc nhiều tháng cách dấu phẩy
-    const incoming = (month || '').split(',').map(m => _normalizeMonthCode(m)).filter(Boolean);
+    // AI có thể trả về: string, array, "Y2507", "07/2026", năm "2026"/"26"
+    let rawList;
+    if (Array.isArray(month)) {
+      rawList = month.map(m => String(m).trim()).filter(Boolean);
+    } else {
+      rawList = (String(month || '')).split(',').map(m => m.trim()).filter(Boolean);
+    }
+
+    // Expand năm → 12 tháng (VD: "2026" → [Y2601..Y2612], "26" → [Y2601..Y2612])
+    rawList = rawList.flatMap(raw => {
+      const yearMatch = raw.match(/^(?:20)?(\d{2})$/);
+      if (yearMatch && !raw.includes('/') && !raw.includes('-') && !raw.includes('.')) {
+        const yy = yearMatch[1];
+        return Array.from({ length: 12 }, (_, i) => `Y${yy}${String(i + 1).padStart(2, '0')}`);
+      }
+      return [raw];
+    });
+
+    const incoming = rawList.map(m => _normalizeMonthCode(m)).filter(Boolean);
     if (!incoming.length) return 'Không xác định được tháng';
 
-    // Validate: kiểm tra mã tháng có tồn tại trong dữ liệu không (phát hiện AI nhầm năm)
+    // Validate nhẹ: cảnh báo nếu tháng không tồn tại trong dữ liệu, nhưng vẫn set filter
     const availableMonths = (window.AppState?.getDashboardSummary?.()?.uniqueMonths)
       || (window.AppState?.getSummary?.()?.tableByMonth || []).map(r => r.month);
+    let validationWarning = '';
     if (availableMonths.length) {
       const missing = incoming.filter(m => !availableMonths.includes(m));
       if (missing.length === incoming.length) {
         const hint = availableMonths.slice(0, 8).join(', ');
-        return `Không tìm thấy tháng ${missing.join(', ')} trong dữ liệu (có thể AI nhầm năm). Tháng có dữ liệu: ${hint}...`;
+        validationWarning = ` (lưu ý: tháng ${missing.slice(0, 3).join(', ')}... chưa có dữ liệu. Tháng có dữ liệu: ${hint})`;
       }
     }
 
@@ -199,7 +221,7 @@ const ChatbotService = (() => {
       SlicerService.setFieldFilter('month', incoming);
       DashboardRenderer?.render?.();
       await _delay(150);
-      return `Đã lọc dashboard theo tháng: ${incoming.join(', ')}`;
+      return `Đã lọc dashboard theo tháng: ${incoming.join(', ')}${validationWarning}`;
     }
 
     // SaleOut tab: dùng SaleOutRenderer trực tiếp
@@ -214,6 +236,7 @@ const ChatbotService = (() => {
       else next = [...current, m];
     }
 
+    _chatbotMonths = next; // track để re-apply nếu SaleOutRenderer bị reset async
     SaleOutRenderer.setMonthFilter(next);
 
     // Visual feedback trên từng pill
@@ -222,12 +245,14 @@ const ChatbotService = (() => {
         .find(p => (p.dataset.value || '').trim() === m);
       if (pill) { _spawnRipple(pill); _showActionLabel(pill, `AI: Chọn tháng ${m}`); }
     }
-    await _delay(150);
-    return `Đã lọc tháng: ${next.join(', ')}`;
+    await _delay(250);
+    return `Đã lọc tháng: ${next.join(', ')}${validationWarning}`;
   }
 
   async function _execClearFilters() {
     _lastProductFilterError = null;
+    _chatbotMonths   = [];
+    _chatbotProducts = [];
     if (_isDashboard()) {
       SlicerService.clearAllValues?.();
       DashboardRenderer?.render?.();
@@ -281,9 +306,20 @@ const ChatbotService = (() => {
     } catch (_) { return 'Không đọc được trạng thái'; }
   }
 
+  // Re-apply filter nếu SaleOutRenderer bị reset bởi async event (setData resets _filters)
+  function _ensureFilterApplied() {
+    if (_isDashboard()) return; // dashboard dùng SlicerService, không cần check
+    const current = SaleOutRenderer.getFilters?.() || { months: [], shortNames: [] };
+    const needsMonth   = _chatbotMonths.length > 0 && current.months.length === 0;
+    const needsProduct = _chatbotProducts.length > 0 && current.shortNames.length === 0;
+    if (needsMonth)   SaleOutRenderer.setMonthFilter(_chatbotMonths);
+    if (needsProduct) SaleOutRenderer.setProductFilter(_chatbotProducts);
+  }
+
   // Đọc tổng lỗi từ dữ liệu SAU KHI filter đã được áp dụng
   async function _execSumErrors() {
     try {
+      _ensureFilterApplied();
       if (_isDashboard()) {
         const dash = window.AppState?.getDashboardSummary?.() || {};
         const filterParts = (dash.activeSlicers || []).map(sl => `${sl.field}: ${sl.values.join(', ')}`);
@@ -304,6 +340,7 @@ const ChatbotService = (() => {
 
   async function _execSumRate() {
     try {
+      _ensureFilterApplied();
       if (_isDashboard()) {
         return 'TLL% không tính được trên tab Biểu đồ (cần dữ liệu Sale Out từ tab Tỷ lệ lỗi)';
       }
@@ -450,6 +487,8 @@ const ChatbotService = (() => {
   // Đọc bảng xếp hạng sản phẩm SAU KHI filter đã áp dụng
   async function _execReadTopProducts({ limit, by }) {
     try {
+      await _delay(100);
+      _ensureFilterApplied();
       const n = parseInt(limit) || 10;
       const s = window.AppState?.getSummary?.() || {};
       const filterParts = [];
@@ -650,8 +689,8 @@ const ChatbotService = (() => {
       `Dataset:${s.activeDataset || 'spm1'} Tab hiện tại:${tabLabel[s.activeSubTab] || s.activeSubTab || 'rate'} Records:${s.recordCount || 0}`,
       filterParts.length ? `Filter:${filterParts.join('; ')}` : 'Filter: không có',
       quickStats        ? `\n${quickStats}` : '',
-      errorRankLines    ? `\nTOP SẢN PHẨM LỖI NHIỀU NHẤT (xếp theo số lỗi):\n${errorRankLines}` : '',
-      productLines      ? `\nBẢNG SẢN PHẨM THEO TLL% (xếp theo ${s.tableOrder === 'asc' ? 'TLL% thấp nhất' : 'TLL% cao nhất'}):\n${productLines}` : '',
+      errorRankLines    ? `\nTOP SẢN PHẨM LỖI NHIỀU NHẤT [snapshot trước khi lọc — nếu user hỏi theo năm/tháng cụ thể hãy dùng read_top_products sau filter_month thay vì quote đây]:\n${errorRankLines}` : '',
+      productLines      ? `\nBẢNG SẢN PHẨM THEO TLL% [snapshot trước khi lọc] (xếp theo ${s.tableOrder === 'asc' ? 'TLL% thấp nhất' : 'TLL% cao nhất'}):\n${productLines}` : '',
       monthLines        ? `\nBẢNG THÁNG (6 tháng gần nhất):\n${monthLines}` : '',
     ].filter(Boolean).join('\n');
 
@@ -740,6 +779,8 @@ User có thể dùng nhiều cách viết — tất cả đều convert sang Ymm
 "7/2026"→Y2607 | "7-2026"→Y2607 | "2026/07"→Y2607 | "2026-07"→Y2607
 ⛔ Khi user nói rõ năm → dùng đúng năm đó. "06/2025"→Y2506 (KHÔNG phải Y2606 dù năm hiện tại là 2026)
 Dải tháng: "08/2025 đến 02/2026"="Y2508,Y2509,Y2510,Y2511,Y2512,Y2601,Y2602"
+Cả năm: "năm 2026" → filter_month("2026") [hệ thống tự expand thành 12 tháng Y2601..Y2612]
+Cả năm: "năm 2025" → filter_month("2025") [tương tự, expand Y2501..Y2512]
 Quý: Q1=01-03, Q2=04-06, Q3=07-09, Q4=10-12
 
 ⛔ KHÔNG TỰ TẠO SỐ LIỆU: hỏi saleout/bán ra → LUÔN gọi read_saleout_table. KHÔNG tự tính.
@@ -747,7 +788,8 @@ Quý: Q1=01-03, Q2=04-06, Q3=07-09, Q4=10-12
 
 QUAN TRỌNG:
 - Bạn có DỮ LIỆU THỰC. Trả lời trực tiếp, KHÔNG bảo user "xem bảng".
-- TOP SẢN PHẨM trong system = dữ liệu CHƯA lọc. KHÔNG dùng khi có filter tháng/SP cụ thể.
+- TOP SẢN PHẨM trong system = snapshot CHƯA lọc. KHÔNG quote những con số đó khi user hỏi theo năm/tháng cụ thể.
+- Khi hỏi xếp hạng SP theo năm/tháng → PHẢI filter_month trước, rồi read_top_products → KHÔNG tự trả lời từ snapshot.
 - Câu hỏi có "model X" / "SP X" kèm phân tích → filter_product("X") TRƯỚC analyze_trend/filter_month.
 - filter_product PHẢI đứng TRƯỚC read_saleout_table.
 - Mỗi câu hỏi ĐỘC LẬP. clear_filters trước filter mới (trừ analyze_trend).
@@ -758,6 +800,9 @@ Ví dụ:
 "tỷ lệ lỗi tháng 6/2026"→switch_sub_tab(rate)+clear_filters+filter_month(Y2606)+sum_rate
 "tổng lỗi tháng 6/2026"→switch_sub_tab(data)+clear_filters+filter_month(Y2606)+sum_errors
 "nhóm lỗi nhiều nhất"→switch_sub_tab(dashboard)+read_dashboard_groups(by=category)
+"model nào TLL% tệ nhất năm 2026"→switch_sub_tab(rate)+clear_filters+filter_month("2026")+read_top_products(by=rate,n=10), reply="Xếp hạng TLL% năm 2026:"
+"model nào lỗi nhiều nhất năm 2025"→switch_sub_tab(rate)+clear_filters+filter_month("2025")+read_top_products(by=errors,n=10), reply="Xếp hạng lỗi nhiều nhất năm 2025:"
+"xếp hạng model tệ nhất năm nay"→switch_sub_tab(rate)+clear_filters+filter_month("2026")+read_top_products(by=rate,n=10), reply="Xếp hạng TLL% năm 2026:"
 "chi tiết lỗi S88"→switch_sub_tab(dashboard)+clear_filters+filter_product("S88")+read_dashboard_groups(by=category)
 "u50k lỗi gì nhiều"→switch_sub_tab(dashboard)+clear_filters+filter_product("u50k")+read_dashboard_groups(by=category)
 "KAQ-U50K có lỗi nào"→switch_sub_tab(dashboard)+clear_filters+filter_product("KAQ-U50K")+read_dashboard_groups(by=category)
