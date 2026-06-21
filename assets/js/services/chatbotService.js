@@ -102,11 +102,23 @@ const ChatbotService = (() => {
   }
 
   async function _execSwitchSubTab({ tab }) {
-    const safeTab = tab || 'rate'; // default nếu AI không trả về tab hợp lệ
-    const IDS    = { rate: 'subtab-saleout-rate', data: 'subtab-saleout-data', pivot: 'subtab-pivot', dashboard: 'subtab-dashboard' };
-    const LABELS = { rate: 'Tỷ lệ lỗi', data: 'Dữ liệu chi tiết', pivot: 'Phân tích', dashboard: 'Biểu đồ' };
-    const el = document.getElementById(IDS[safeTab]);
-    await _simulateClick(el, `AI: Chuyển sang tab ${LABELS[safeTab] || safeTab}`);
+    const safeTab = tab || 'rate';
+    const LABELS   = { rate: 'Tỷ lệ lỗi', data: 'Dữ liệu chi tiết', pivot: 'Phân tích', dashboard: 'Biểu đồ chi tiết lỗi' };
+    const SECTIONS = { rate: 'saleout', data: 'saleout', pivot: 'pivot', dashboard: 'dashboard' };
+    const IDS      = { rate: 'subtab-saleout-rate', data: 'subtab-saleout-data', pivot: 'subtab-pivot', dashboard: 'subtab-dashboard' };
+
+    const section = SECTIONS[safeTab];
+    if (section && typeof window._mainActivateTab === 'function') {
+      // Gọi trực tiếp hàm activate — đảm bảo _activeSection được cập nhật ngay, không phụ thuộc vào click event
+      window._mainActivateTab(section);
+      // Visual: ripple trên button tương ứng
+      const el = document.getElementById(IDS[safeTab]);
+      if (el) { _spawnRipple(el); _showActionLabel(el, `AI: ${LABELS[safeTab] || safeTab}`); }
+    } else {
+      const el = document.getElementById(IDS[safeTab]);
+      await _simulateClick(el, `AI: Chuyển sang tab ${LABELS[safeTab] || safeTab}`);
+    }
+    if (safeTab === 'dashboard') await _delay(500); // chờ dashboard render xong
     return `Đã chuyển sang tab ${LABELS[safeTab] || safeTab}`;
   }
 
@@ -116,6 +128,7 @@ const ChatbotService = (() => {
 
   async function _execFilterProduct({ query }) {
     const q = (query || '').toLowerCase().trim();
+    if (!q) return 'Vui lòng chỉ định tên hoặc mã sản phẩm cụ thể';
 
     if (_isDashboard()) {
       // Dashboard tab: dùng SlicerService cho field product_shortname
@@ -746,6 +759,8 @@ Ví dụ:
 "tổng lỗi tháng 6/2026"→switch_sub_tab(data)+clear_filters+filter_month(Y2606)+sum_errors
 "nhóm lỗi nhiều nhất"→switch_sub_tab(dashboard)+read_dashboard_groups(by=category)
 "chi tiết lỗi S88"→switch_sub_tab(dashboard)+clear_filters+filter_product("S88")+read_dashboard_groups(by=category)
+"u50k lỗi gì nhiều"→switch_sub_tab(dashboard)+clear_filters+filter_product("u50k")+read_dashboard_groups(by=category)
+"KAQ-U50K có lỗi nào"→switch_sub_tab(dashboard)+clear_filters+filter_product("KAQ-U50K")+read_dashboard_groups(by=category)
 "xu hướng TLL% 3 tháng gần nhất"→switch_sub_tab(rate)+filter_month(3 tháng cuối)+analyze_trend
 "SP S66 xu hướng lỗi 2025"→switch_sub_tab(rate)+clear_filters+filter_product("S66")+filter_month("Y2501,...,Y2512")+analyze_trend
 "dữ liệu saleout năm 2025"→switch_sub_tab(rate)+read_saleout_table({year:2025}), reply=""
@@ -972,12 +987,19 @@ Năm không hợp lệ (1015, 3000...)→KHÔNG gọi tools, reply giải thích
       actions.splice(firstFilterIdx, 0, clearAction);
     }
 
-    // Đảm bảo các "read" tools luôn chạy SAU tất cả filter_* (tránh đọc trước khi filter được áp dụng)
-    const READ_TOOLS = new Set(['read_saleout_table','read_top_products','read_dashboard_groups','sum_errors','sum_rate','analyze_trend']);
-    const nonReadActions = actions.filter(a => !READ_TOOLS.has(a.name));
-    const readActions    = actions.filter(a =>  READ_TOOLS.has(a.name));
+    // Sắp xếp thứ tự chuẩn: switch_tab → clear → filter → other → read
+    // switch_sub_tab PHẢI chạy trước filter_product để filter đúng ngữ cảnh (dashboard vs saleout)
+    const READ_TOOLS  = new Set(['read_saleout_table','read_top_products','read_dashboard_groups','sum_errors','sum_rate','analyze_trend']);
+    const TAB_ACTIONS = new Set(['switch_main_tab','switch_sub_tab']);
+    const actTab    = actions.filter(a =>  TAB_ACTIONS.has(a.name));
+    const actClear  = actions.filter(a =>  a.name === 'clear_filters');
+    const actFilter = actions.filter(a =>  (a.name === 'filter_month' || a.name === 'filter_product'));
+    const actRead   = actions.filter(a =>  READ_TOOLS.has(a.name));
+    const actOther  = actions.filter(a => !TAB_ACTIONS.has(a.name) && a.name !== 'clear_filters'
+                                       && a.name !== 'filter_month' && a.name !== 'filter_product'
+                                       && !READ_TOOLS.has(a.name));
     actions.length = 0;
-    actions.push(...nonReadActions, ...readActions);
+    actions.push(...actTab, ...actClear, ...actFilter, ...actOther, ...actRead);
 
     // Thực thi actions
     const toolResults = [];
