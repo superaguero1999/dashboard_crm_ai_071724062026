@@ -554,7 +554,7 @@ const SaleOutRenderer = (() => {
     }).join('');
 
     return _tableWrap('border-rose-200','bg-rose-50',
-      '<span class="text-rose-700">📉 Tỷ lệ lỗi lũy kế (Lỗi ÷ Sale Out)</span>',
+      `<span class="text-rose-700">📉 Tỷ lệ lỗi lũy kế (Lỗi ÷ ${_namespace === 'spm2' ? 'Sale In' : 'Sale Out'})</span>`,
       '— màu: <span class="text-red-600 font-bold">≥5%</span> · <span class="text-amber-600">≥2%</span> · <span class="text-emerald-600">&lt;2%</span>',
       summaryRow, colHeaderRow, rows);
   }
@@ -662,7 +662,7 @@ const SaleOutRenderer = (() => {
     }).join('');
 
     return _tableWrap('border-blue-200','bg-blue-50',
-      '<span class="text-blue-700">📦 Dữ liệu Sale Out</span>', '',
+      `<span class="text-blue-700">📦 Dữ liệu ${_namespace === 'spm2' ? 'Sale In' : 'Sale Out'}</span>`, '',
       summaryRow, colHeaderRow, rows);
   }
 
@@ -754,7 +754,7 @@ const SaleOutRenderer = (() => {
             <tr>
               <th class="px-2 py-1.5 text-left font-semibold text-gray-500 border-b">Tên rút gọn</th>
               <th class="px-2 py-1.5 text-right font-semibold text-gray-500 border-b">Lỗi</th>
-              <th class="px-2 py-1.5 text-right font-semibold text-gray-500 border-b">Sale</th>
+              <th class="px-2 py-1.5 text-right font-semibold text-gray-500 border-b">${_namespace === 'spm2' ? 'Sale in' : 'Sale out'}</th>
               <th class="px-2 py-1.5 text-right font-semibold text-gray-500 border-b">TLL%</th>
             </tr>
           </thead>
@@ -782,7 +782,7 @@ const SaleOutRenderer = (() => {
             <tr>
               <th class="px-2 py-1.5 text-left font-semibold text-gray-500 border-b">Tháng</th>
               <th class="px-2 py-1.5 text-right font-semibold text-gray-500 border-b">Lỗi</th>
-              <th class="px-2 py-1.5 text-right font-semibold text-gray-500 border-b">Sale</th>
+              <th class="px-2 py-1.5 text-right font-semibold text-gray-500 border-b">${_namespace === 'spm2' ? 'Sale in' : 'Sale out'}</th>
               <th class="px-2 py-1.5 text-right font-semibold text-gray-500 border-b" title="Lũy kế từ tháng đầu đến tháng này">TLL% (LK)</th>
             </tr>
           </thead>
