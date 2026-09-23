@@ -1050,15 +1050,19 @@ Q1=01-03, Q2=04-06, Q3=07-09, Q4=10-12
 
 Năm không hợp lệ (1015, 3000...) → KHÔNG gọi tools, reply giải thích.`;
 
-  // ── Model rotation — Gemini trước (free tier: ~20 RPD/model), fallback Groq khi exhausted ──
+  // ── Model rotation — Groq trước, fallback Gemini khi exhausted ──
+  // Groq (09/2026): llama/qwen3-32b/compound đã bị loại bỏ. Các model còn lại đều 30 RPM, 1K RPD, 8K TPM, 200K TPD
   const GROQ_MODELS = [
-    'meta-llama/llama-4-scout-17b-16e-instruct',  // #1: MoE mạnh nhất Groq, 500K TPD ~167 req/ngày
-    'qwen/qwen3-32b',                              // #2: tiếng Việt tốt nhất Groq, 500K TPD
-    'llama-3.3-70b-versatile',                     // #3: ổn định, 100K TPD ~33 req/ngày
-    'llama-3.1-8b-instant',                        // #7: yếu, dùng sau Gemini, 500K TPD
-    'compound-beta',                               // #8: emergency, 250 RPD, no TPD limit
-    'compound-beta-mini',                          // #9: emergency, 250 RPD, no TPD limit
+    'openai/gpt-oss-120b',   // #1: mạnh nhất, reasoning model
+    'qwen/qwen3.8-27b',      // #2: tiếng Việt tốt
+    'openai/gpt-oss-20b',    // #3: nhẹ, fallback
   ];
+  // Tham số riêng cho reasoning model — giảm reasoning để tiết kiệm token (8K TPM)
+  const GROQ_MODEL_PARAMS = {
+    'openai/gpt-oss-120b': { reasoning_effort: 'low' },
+    'openai/gpt-oss-20b':  { reasoning_effort: 'low' },
+    'qwen/qwen3.8-27b':    { reasoning_format: 'hidden' },
+  };
   const GEMINI_MODELS = [
     'gemini-2.5-flash',       // #1: chính, 20 RPD (free), 1K RPM
     'gemini-2.5-flash-lite',  // #2: fallback nhanh, 20 RPD (free)
@@ -1068,6 +1072,7 @@ Năm không hợp lệ (1015, 3000...) → KHÔNG gọi tools, reply giải thí
   const _skipModels    = new Map(); // model → timestamp hết hạn skip (tạm thời, không vĩnh viễn)
   const _skipModelsPerm= new Set(); // models bị tắt hẳn (decommissioned/hết TPD ngày)
   const _403counts     = new Map(); // đếm 403 liên tiếp mỗi model
+  const _noExtraParams = new Set(); // models không hỗ trợ GROQ_MODEL_PARAMS
 
   const SKIP_TEMP_MS   = 5 * 60 * 1000; // 403 tạm thời → skip 5 phút rồi thử lại
 
@@ -1092,6 +1097,9 @@ Năm không hợp lệ (1015, 3000...) → KHÔNG gọi tools, reply giải thí
       || body.includes('RESOURCE_EXHAUSTED') || body.includes('quota');
     // 413 có 2 nghĩa: "per minute" exceeded → retry; còn lại → request quá lớn cho model này → switch
     if (status === 413) return !body.includes('per minute');
+    // 404 = model đã bị xoá / không có quyền truy cập → chuyển model khác
+    if (status === 404) return true;
+    if (body.includes('model_not_found') || body.includes('does not exist') || body.includes('model_decommissioned')) return true;
     if (status === 400) return body.includes('decommissioned') || body.includes('no longer supported')
       || body.includes('response_format') || body.includes('not supported');
     return false;
@@ -1137,13 +1145,21 @@ Năm không hợp lệ (1015, 3000...) → KHÔNG gọi tools, reply giải thí
           body: JSON.stringify({
             model,
             messages,
-            max_tokens: 420,
+            // Reasoning model tính cả token suy luận vào max_tokens → cần dư hơn 420
+            max_tokens: 1200,
             response_format: { type: 'json_object' },
+            ...(_noExtraParams.has(model) ? {} : (GROQ_MODEL_PARAMS[model] || {})),
           }),
         });
 
         if (!res.ok) {
           const errBody = await res.text();
+          // Model không nhận tham số reasoning → bỏ tham số và gửi lại
+          if (res.status === 400 && /reasoning_(effort|format)/.test(errBody) && !_noExtraParams.has(model)) {
+            _noExtraParams.add(model);
+            attempt--;
+            continue;
+          }
           if (_shouldSkipModel(res.status, errBody)) {
             // Model không dùng được (hết TPD hoặc bị tắt) → skip vĩnh viễn trong session
             _skipModelsPerm.add(model);
@@ -1217,7 +1233,8 @@ Năm không hợp lệ (1015, 3000...) → KHÔNG gọi tools, reply giải thí
     }
 
     // Parse JSON response
-    const raw = data?.choices?.[0]?.message?.content || '{}';
+    // Bỏ phần suy luận <think>...</think> nếu model trả lẫn vào content
+    const raw = (data?.choices?.[0]?.message?.content || '{}').replace(/<think>[\s\S]*?<\/think>/g, '').trim() || '{}';
     let parsed = {};
     try { parsed = JSON.parse(raw); } catch (_) {
       const m = raw.match(/\{[\s\S]*\}/);
